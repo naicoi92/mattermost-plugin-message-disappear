@@ -22,7 +22,7 @@ export default function ChannelHeaderButton() {
         );
     }
 
-    const detail = `Disappearing: auto-delete after ${ttl.duration}s` +
+    const detail = `Disappearing: auto-delete after ${shortDuration(ttl.duration)}` +
         (ttl.set_by ? ` · set by ${ttl.set_by}` : '') +
         (ttl.set_at ? ` · ${new Date(ttl.set_at).toLocaleString()}` : '');
 

@@ -10,7 +10,7 @@ const fetchedChannels = new Set<string>();
 
 // useChannelTTL returns the channel's TTL, lazy-loading it once per channel and
 // then reacting to ttl_changed WebSocket updates (kept in the store by index.tsx).
-//   - undefined  -> not yet loaded (and a load is in flight)
+//   - undefined  -> not yet loaded (a load may be in flight)
 //   - null       -> explicitly off
 //   - TTLInfo    -> a TTL is set
 export function useChannelTTL(channelId: string | null | undefined) {
@@ -18,7 +18,10 @@ export function useChannelTTL(channelId: string | null | undefined) {
     const ttl = useSelector((state: GlobalSlice) => (channelId ? selectChannelTTL(state, channelId) : undefined));
 
     useEffect(() => {
-        if (!channelId || ttl !== undefined || fetchedChannels.has(channelId)) {
+        // Fetch once per channel. ttl is intentionally NOT a dependency, so a
+        // failed fetch (ttl left undefined) cannot trigger a retry loop when an
+        // unrelated store update re-renders the component.
+        if (!channelId || fetchedChannels.has(channelId)) {
             return;
         }
         fetchedChannels.add(channelId);
@@ -35,7 +38,7 @@ export function useChannelTTL(channelId: string | null | undefined) {
         return () => {
             cancelled = true;
         };
-    }, [channelId, ttl, dispatch]);
+    }, [channelId, dispatch])
 
     return ttl;
 }
