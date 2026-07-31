@@ -96,8 +96,11 @@ func (s *Service) checkCanManage(actorID, channelID string) error {
 		return nil
 	}
 	ch, appErr := s.perm.GetChannel(channelID)
-	if appErr != nil || ch == nil {
-		return fmt.Errorf("%w: %s", ErrChannelNotFound, channelID)
+	if appErr != nil {
+		return fmt.Errorf("%w: %s: %s", ErrChannelNotFound, channelID, appErr.Error())
+	}
+	if ch == nil {
+		return fmt.Errorf("%w: %s: nil channel, no app error", ErrChannelNotFound, channelID)
 	}
 	if ch.IsGroupOrDirect() {
 		// DM/Group DM: any participant may set (equal trust, D2). Membership is

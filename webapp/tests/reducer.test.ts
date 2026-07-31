@@ -1,4 +1,5 @@
-import reducer, {closeModal, openModal, setChannelTTL} from 'reducer';
+import manifest from 'manifest';
+import reducer, {closeModal, openModal, PLUGIN_REDUCER_KEY, selectChannelTTL, setChannelTTL} from 'reducer';
 import type {DisappearState} from 'reducer';
 
 const ttl = {duration: 300, set_by: 'u1', set_at: 7};
@@ -32,4 +33,18 @@ it('unknown action returns the same state reference (redux contract)', () => {
     const before = reducer(undefined, openModal('ch9'));
     const after = reducer(before, {type: 'UNKNOWN'} as unknown as Parameters<typeof reducer>[1]);
     expect(after).toBe(before);
+});
+
+it('selectChannelTTL reads the slice from state[plugins-<id>]', () => {
+    const state: Record<string, unknown> = {
+        [PLUGIN_REDUCER_KEY]: {byChannel: {ch1: ttl}, modalChannelId: null},
+    };
+    expect(selectChannelTTL(state, 'ch1')).toEqual(ttl);
+    expect(selectChannelTTL(state, 'absent')).toBeUndefined();
+});
+
+it('selectChannelTTL ignores any legacy root key (regression: must read plugins-<id>)', () => {
+    const state: Record<string, unknown> = {disappearingMessages: {byChannel: {ch1: ttl}}};
+    expect(selectChannelTTL(state, 'ch1')).toBeUndefined();
+    expect(PLUGIN_REDUCER_KEY).toBe('plugins-' + manifest.id);
 });

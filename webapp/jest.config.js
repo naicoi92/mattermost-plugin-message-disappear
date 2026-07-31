@@ -1,5 +1,6 @@
 module.exports = {
     testEnvironment: 'jsdom',
+    setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
     transform: {
         '^.+\\.(js|jsx|ts|tsx)$': 'babel-jest',
     },

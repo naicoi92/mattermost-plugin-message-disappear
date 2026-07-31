@@ -6,15 +6,57 @@
     opacity: 0.75;
 }
 
-.disappear-header-icon {
+/* Channel-header TTL dropdown button (MPMD-32). */
+.disappear-dropdown {
+    position: relative;
+    display: inline-block;
+}
+.disappear-toggle {
     display: inline-flex;
     align-items: center;
-    gap: 2px;
+    gap: 3px;
+    padding: 2px 8px;
+    border: 1px solid var(--center-channel-color, #1a1a1a);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--center-channel-color, #1a1a1a);
+    font-size: 0.9em;
+    cursor: pointer;
+}
+.disappear-toggle--off {
+    opacity: 0.55;
+}
+.disappear-toggle:hover {
+    background: rgba(0, 0, 0, 0.05);
+}
+.disappear-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    z-index: 50;
+    min-width: 140px;
+    background: var(--center-channel-bg, #fff);
+    color: var(--center-channel-color, #1a1a1a);
+    border: 1px solid rgba(0, 0, 0, 0.12);
+    border-radius: 6px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+    padding: 4px;
+    display: flex;
+    flex-direction: column;
+}
+.disappear-menuitem {
+    text-align: left;
+    padding: 6px 10px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    border-radius: 4px;
     font-size: 0.9em;
 }
-
-.disappear-header-icon--off {
-    opacity: 0.45;
+.disappear-menuitem:hover,
+.disappear-menuitem[aria-current='true'] {
+    background: rgba(0, 0, 0, 0.07);
 }
 
 .disappear-modal-backdrop {
