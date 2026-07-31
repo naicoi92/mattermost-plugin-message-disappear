@@ -56,7 +56,7 @@ jobs:
         run: npm run build
 
   bundle:
-    name: Bundle (make all)
+    name: Bundle (make dist)
     runs-on: ubuntu-latest
     needs: [server, webapp]
     steps:
@@ -70,5 +70,5 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: webapp/package.json
-      - name: make all
-        run: make all
+      - name: make dist
+        run: make dist
