@@ -20,8 +20,23 @@
         "bundle_path": "webapp/dist/main.js"
     },
     "settings_schema": {
-        "header": "",
+        "header": "Disappearing Messages settings. See the README for the hard-delete (D10) risks.",
         "footer": "",
-        "settings": []
+        "settings": [
+            {
+                "key": "enablepurge",
+                "display_name": "Enable Hard Purge",
+                "type": "bool",
+                "default": true,
+                "help_text": "When ON, expired messages are hard-deleted from the database (transactional purge). When OFF, the sweeper falls back to Mattermost's soft-delete."
+            },
+            {
+                "key": "purgeschemaallowlist",
+                "display_name": "Purge Schema Allowlist",
+                "type": "text",
+                "default": "10.,11.",
+                "help_text": "Comma-separated Mattermost server version prefixes whose DB schema has been verified for hard purge (e.g. 10.,11.). The hard purge is skipped (fail-safe) on any other version. Edit after upgrading Mattermost."
+            }
+        ]
     }
 }
