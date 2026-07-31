@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/mattermost/mattermost/server/public v0.1.21
+	github.com/pkg/errors v0.9.1
 	github.com/stretchr/testify v1.11.1
 	modernc.org/sqlite v1.37.0
 )
@@ -40,7 +41,6 @@ require (
 	github.com/pborman/uuid v1.2.1 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/philhofer/fwd v1.2.0 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/russellhaering/goxmldsig v1.5.0 // indirect
