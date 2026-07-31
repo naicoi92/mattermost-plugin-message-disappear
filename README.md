@@ -32,6 +32,12 @@ fallback. Remaining: EE legal-hold coexist (V5) and release hardening (V6).
 - **Schema-dependent purge.** Hard purge binds to tested MM versions via
   `PurgeSchemaAllowlist`; it is skipped (fail-safe) on unverified schemas. Verify the
   footprint column names against your MM version before production use.
+- **Enterprise legal-hold respected via soft-delete.** On a licensed Enterprise server
+  the plugin's direct DB DELETE would bypass legal-hold (enforced at the API layer,
+  not the DB) — and the plugin API exposes no way to query legal-hold. So on Enterprise
+  the sweeper falls back to Mattermost's soft-delete, which honours legal-hold (D11).
+  Hard purge runs on the Team edition (no legal-hold). The plugin and native Data
+  Retention coexist independently (first-deletion-wins, idempotent).
 
 ## Requirements
 

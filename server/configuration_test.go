@@ -20,10 +20,11 @@ func TestVersionAllowed(t *testing.T) {
 }
 
 func TestPurgeDecision(t *testing.T) {
-	assert.Equal(t, "soft", purgeDecision(false, "10.0.0", []string{"10."}), "EnablePurge off -> soft")
-	assert.Equal(t, "skip", purgeDecision(true, "9.0.0", []string{"10."}), "untested version -> skip (fail-safe)")
-	assert.Equal(t, "skip", purgeDecision(true, "10.0.0", nil), "empty allowlist -> skip")
-	assert.Equal(t, "hard", purgeDecision(true, "10.5.0", []string{"10.", "11."}), "allowed -> hard")
+	assert.Equal(t, "soft", purgeDecision(false, false, "10.0.0", []string{"10."}), "EnablePurge off -> soft")
+	assert.Equal(t, "soft", purgeDecision(true, true, "10.5.0", []string{"10."}), "Enterprise -> soft (legal-hold safety)")
+	assert.Equal(t, "skip", purgeDecision(true, false, "9.0.0", []string{"10."}), "untested version -> skip (fail-safe)")
+	assert.Equal(t, "skip", purgeDecision(true, false, "10.0.0", nil), "empty allowlist -> skip")
+	assert.Equal(t, "hard", purgeDecision(true, false, "10.5.0", []string{"10.", "11."}), "Team + allowed -> hard")
 }
 
 // --- configPurger fakes ---
@@ -52,24 +53,30 @@ func (f *fakeSoft) DeletePost(id string) *model.AppError {
 
 type fakeVersionLogger struct {
 	version string
+	license *model.License
 	errors  []string
 	infos   []string
 }
 
 func (f *fakeVersionLogger) GetServerVersion() string      { return f.version }
+func (f *fakeVersionLogger) GetLicense() *model.License    { return f.license }
 func (f *fakeVersionLogger) LogInfo(msg string, _ ...any)  { f.infos = append(f.infos, msg) }
 func (f *fakeVersionLogger) LogError(msg string, _ ...any) { f.errors = append(f.errors, msg) }
 
-func newConfigPurger(t *testing.T, enablePurge bool, allowlist, version string) (*configPurger, *fakeHardPurger, *fakeSoft, *fakeVersionLogger) {
+func newConfigPurger(t *testing.T, enablePurge, isEnterprise bool, allowlist, version string) (*configPurger, *fakeHardPurger, *fakeSoft, *fakeVersionLogger) {
 	t.Helper()
 	holder := &configHolder{}
 	holder.set(configuration{EnablePurge: enablePurge, PurgeSchemaAllowlistRaw: allowlist})
-	hard, soft, vl := &fakeHardPurger{}, &fakeSoft{}, &fakeVersionLogger{version: version}
+	hard, soft := &fakeHardPurger{}, &fakeSoft{}
+	vl := &fakeVersionLogger{version: version}
+	if isEnterprise {
+		vl.license = &model.License{} // non-nil = Enterprise-licensed
+	}
 	return &configPurger{cfg: holder, hard: hard, soft: soft, api: vl}, hard, soft, vl
 }
 
 func TestConfigPurgerHardPath(t *testing.T) {
-	cp, hard, soft, vl := newConfigPurger(t, true, "10.,11.", "10.5.0")
+	cp, hard, soft, vl := newConfigPurger(t, true, false, "10.,11.", "10.5.0") // Team + allowed
 	n, err := cp.Purge(context.Background(), []string{"p1", "p2"})
 	require.NoError(t, err)
 	assert.Equal(t, 2, n)
@@ -80,7 +87,7 @@ func TestConfigPurgerHardPath(t *testing.T) {
 }
 
 func TestConfigPurgerSkipPath(t *testing.T) {
-	cp, hard, soft, vl := newConfigPurger(t, true, "10.,11.", "9.0.0") // untested schema
+	cp, hard, soft, vl := newConfigPurger(t, true, false, "10.,11.", "9.0.0") // untested schema
 	n, err := cp.Purge(context.Background(), []string{"p1"})
 	require.ErrorIs(t, err, errSchemaSkipped, "skip returns the sentinel so the sweeper keeps the rows for retry")
 	assert.Equal(t, 0, n, "skip touches no data")
@@ -90,7 +97,7 @@ func TestConfigPurgerSkipPath(t *testing.T) {
 }
 
 func TestConfigPurgerSoftPath(t *testing.T) {
-	cp, hard, soft, vl := newConfigPurger(t, false, "10.", "10.0.0") // EnablePurge off
+	cp, hard, soft, vl := newConfigPurger(t, false, false, "10.", "10.0.0") // EnablePurge off
 	n, err := cp.Purge(context.Background(), []string{"p1", "p2"})
 	require.NoError(t, err)
 	assert.Equal(t, 2, n)
@@ -99,8 +106,19 @@ func TestConfigPurgerSoftPath(t *testing.T) {
 	assert.Empty(t, vl.errors)
 }
 
+func TestConfigPurgerEnterpriseUsesSoft(t *testing.T) {
+	// Enterprise-licensed: hard purge would bypass legal-hold, so soft-delete (D11).
+	cp, hard, soft, vl := newConfigPurger(t, true, true, "10.,11.", "10.5.0")
+	n, err := cp.Purge(context.Background(), []string{"p1"})
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.Equal(t, 0, hard.called, "hard purge not used on Enterprise (legal-hold safety)")
+	assert.Equal(t, []string{"p1"}, soft.deleted)
+	assert.Empty(t, vl.errors)
+}
+
 func TestConfigPurgerEmptyBatchIsNoOp(t *testing.T) {
-	cp, hard, _, _ := newConfigPurger(t, true, "10.", "10.0.0")
+	cp, hard, _, _ := newConfigPurger(t, true, false, "10.", "10.0.0")
 	n, err := cp.Purge(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)

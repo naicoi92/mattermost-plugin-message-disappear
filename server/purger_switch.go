@@ -26,6 +26,7 @@ type softDeleter interface {
 // versionLogger is the plugin-API subset the configPurger needs.
 type versionLogger interface {
 	GetServerVersion() string
+	GetLicense() *model.License
 	LogInfo(msg string, keyvals ...any)
 	LogError(msg string, keyvals ...any)
 }
@@ -45,7 +46,7 @@ func (p *configPurger) Purge(ctx context.Context, postIDs []string) (int, error)
 		return 0, nil
 	}
 	cfg := p.cfg.get()
-	switch purgeDecision(cfg.EnablePurge, p.api.GetServerVersion(), cfg.PurgeSchemaAllowlist()) {
+	switch purgeDecision(cfg.EnablePurge, p.api.GetLicense() != nil, p.api.GetServerVersion(), cfg.PurgeSchemaAllowlist()) {
 	case "soft":
 		return p.softDelete(postIDs), nil
 	case "skip":

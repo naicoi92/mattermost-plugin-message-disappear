@@ -64,10 +64,16 @@ func versionAllowed(serverVersion string, allowlist []string) bool {
 }
 
 // purgeDecision picks the sweeper's deletion mode for the current config + server
-// version: "soft" (EnablePurge off), "skip" (untested schema -> fail-safe, no data
-// touched), or "hard" (transactional DB purge).
-func purgeDecision(enablePurge bool, serverVersion string, allowlist []string) string {
-	if !enablePurge {
+// edition/version: "soft" (EnablePurge off, OR Enterprise for legal-hold safety),
+// "skip" (untested schema -> fail-safe, no data touched), or "hard" (transactional
+// DB purge).
+//
+// On Enterprise the plugin's direct DB DELETE would bypass legal-hold (which MM
+// enforces at the API/store layer, not the DB). The plugin API exposes no way to
+// query legal-hold, so on a licensed (Enterprise) server the sweeper falls back to
+// soft-delete so MM's DeletePost honours it (D11: do not bypass compliance).
+func purgeDecision(enablePurge, isEnterprise bool, serverVersion string, allowlist []string) string {
+	if !enablePurge || isEnterprise {
 		return "soft"
 	}
 	if !versionAllowed(serverVersion, allowlist) {
