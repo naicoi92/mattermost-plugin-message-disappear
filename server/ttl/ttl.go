@@ -21,7 +21,6 @@ type Preset struct {
 // Presets are the offered TTL shortcuts (D4). Custom values within
 // [MinTTL, MaxTTL] are also allowed.
 var Presets = []Preset{
-	{"30s", 30 * time.Second},
 	{"5m", 5 * time.Minute},
 	{"1h", time.Hour},
 	{"8h", 8 * time.Hour},
