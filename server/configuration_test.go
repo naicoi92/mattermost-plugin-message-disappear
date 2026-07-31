@@ -15,6 +15,8 @@ func TestVersionAllowed(t *testing.T) {
 	assert.True(t, versionAllowed("10.5.0", []string{"10.", "11."}), "prefix match")
 	assert.False(t, versionAllowed("9.9.0", []string{"10.", "11."}), "no match")
 	assert.True(t, versionAllowed("11.0.0", []string{"10.", "11."}))
+	assert.False(t, versionAllowed("100.0.0", []string{"10."}), "no false-positive: '100.x' must not match '10.'")
+	assert.True(t, versionAllowed("11.0.0-rc1", []string{"10.", "11."}), "pre-release suffix matches by prefix")
 }
 
 func TestPurgeDecision(t *testing.T) {
@@ -80,7 +82,7 @@ func TestConfigPurgerHardPath(t *testing.T) {
 func TestConfigPurgerSkipPath(t *testing.T) {
 	cp, hard, soft, vl := newConfigPurger(t, true, "10.,11.", "9.0.0") // untested schema
 	n, err := cp.Purge(context.Background(), []string{"p1"})
-	require.NoError(t, err)
+	require.ErrorIs(t, err, errSchemaSkipped, "skip returns the sentinel so the sweeper keeps the rows for retry")
 	assert.Equal(t, 0, n, "skip touches no data")
 	assert.Equal(t, 0, hard.called)
 	assert.Empty(t, soft.deleted)

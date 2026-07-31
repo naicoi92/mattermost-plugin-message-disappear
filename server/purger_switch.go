@@ -2,12 +2,18 @@ package main
 
 import (
 	"context"
+	"errors"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/purge"
 )
+
+// errSchemaSkipped signals a fail-safe schema-guard skip (untested MM version).
+// It is an error so the sweeper keeps the index rows and retries next tick
+// instead of pruning them as if the posts had been purged.
+var errSchemaSkipped = errors.New("disappear: purge skipped — MM schema version not in allowlist")
 
 // Compile-time: the Mattermost plugin.API satisfies versionLogger.
 var _ versionLogger = (plugin.API)(nil)
@@ -43,14 +49,18 @@ func (p *configPurger) Purge(ctx context.Context, postIDs []string) (int, error)
 	case "soft":
 		return p.softDelete(postIDs), nil
 	case "skip":
-		// Fail-safe: untested MM schema -> touch nothing, alert, keep rows for retry.
+		// Fail-safe: untested MM schema -> touch nothing, alert, and return an error
+		// so the sweeper keeps the index rows for retry (returning nil would make the
+		// sweeper prune the rows, orphaning the posts from the plugin).
 		p.api.LogError("disappear: hard purge skipped — MM schema version not in allowlist (fail-safe)", "version", p.api.GetServerVersion())
-		return 0, nil
+		return 0, errSchemaSkipped
 	default: // "hard"
 		return p.hard.Purge(ctx, postIDs)
 	}
 }
 
+// softDelete best-effort soft-deletes each post (EnablePurge off). Posts whose
+// DeletePost fails are logged; the index rows are still pruned for the whole batch.
 func (p *configPurger) softDelete(postIDs []string) int {
 	for _, id := range postIDs {
 		if appErr := p.soft.DeletePost(id); appErr != nil {
