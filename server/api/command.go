@@ -109,5 +109,5 @@ func ephemeral(channelID, text string) *model.CommandResponse {
 }
 
 func helpText() string {
-	return "`/disappear set <duration>` (30s, 5m, 1h, 8h, 1d, 1w, or custom 1m–1y) · `/disappear status` · `/disappear off`"
+	return "`/disappear set <duration>` (5m, 1h, 8h, 1d, 1w, or custom 1m–1y) · `/disappear status` · `/disappear off`"
 }

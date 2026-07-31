@@ -100,8 +100,8 @@ func (h *Handler) handleSet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if req.ChannelID == "" {
-		writeError(w, http.StatusBadRequest, "channel_id is required")
+	if req.ChannelID == "" || req.TTLSeconds < 0 {
+		writeError(w, http.StatusBadRequest, "channel_id required and ttl_seconds must be non-negative")
 		return
 	}
 
