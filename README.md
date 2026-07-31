@@ -13,12 +13,12 @@ Brings Enterprise-grade **hard-delete message retention** to the Mattermost
 
 ## Status
 
-Core lifecycle implemented: per-channel TTL (KV + presets + permission), HTTP API +
+**v1.0.0** — full lifecycle: per-channel TTL (KV + presets + permission), HTTP API +
 `/disappear` slash command, webapp badge + selector modal, expire index (SQL),
 HA sweeper (`cluster.Schedule`), a **transactional hard purge** gated by a
 schema-version guard (`PurgeSchemaAllowlist`) with an `EnablePurge` soft-delete
 fallback, and EE legal-hold coexist (hard purge on Team; soft-delete on
-Enterprise). Remaining: release hardening (V6).
+Enterprise). See `CHANGELOG.md`.
 
 ## Known limitations
 
@@ -69,7 +69,7 @@ make coverage     # report total coverage (target >= 80%)
 ```sh
 make deploy
 # or, without a deploy target configured:
-make dist && mmctl plugin upload dist/com.github.naicoi92.disappearing-messages-0.1.0.tar.gz
+make dist && mmctl plugin upload dist/com.github.naicoi92.disappearing-messages-1.0.0.tar.gz
 ```
 
 Then enable the plugin via **System Console → Plugins → Plugin Management**, or:
@@ -96,4 +96,4 @@ webapp/                  # TypeScript webapp plugin
 
 ## License
 
-Apache-2.0 (see `LICENSE`).
+MIT (see `LICENSE`).
