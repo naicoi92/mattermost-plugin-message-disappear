@@ -75,3 +75,47 @@ func TestStoreUpdateByRootBumpsWholeThread(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1000), other.ExpireAt, "unrelated post must not be bumped")
 }
+
+func TestStoreGetExpiredRespectsTimeAndLimit(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, store.Upsert(ctx, Entry{PostID: "old", ChannelID: "c", RootID: "old", ExpireAt: 100, CreatedAt: 1}))
+	require.NoError(t, store.Upsert(ctx, Entry{PostID: "now", ChannelID: "c", RootID: "now", ExpireAt: 200, CreatedAt: 1}))
+	require.NoError(t, store.Upsert(ctx, Entry{PostID: "future", ChannelID: "c", RootID: "future", ExpireAt: 300, CreatedAt: 1}))
+
+	// now=200 -> old + now expired, future not; oldest first.
+	got, err := store.GetExpired(ctx, 200, 10)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	assert.Equal(t, []string{"old", "now"}, []string{got[0].PostID, got[1].PostID})
+
+	// limit respected.
+	limited, err := store.GetExpired(ctx, 300, 1)
+	require.NoError(t, err)
+	require.Len(t, limited, 1)
+	assert.Equal(t, "old", limited[0].PostID)
+}
+
+func TestStoreDeleteByPostID(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, store.Upsert(ctx, Entry{PostID: "p1", ChannelID: "c", RootID: "p1", ExpireAt: 1, CreatedAt: 1}))
+	require.NoError(t, store.Upsert(ctx, Entry{PostID: "p2", ChannelID: "c", RootID: "p2", ExpireAt: 1, CreatedAt: 1}))
+
+	require.NoError(t, store.DeleteByPostID(ctx, "p1"))
+	gone, err := store.GetByPostID(ctx, "p1")
+	require.NoError(t, err)
+	assert.Nil(t, gone)
+	kept, err := store.GetByPostID(ctx, "p2")
+	require.NoError(t, err)
+	assert.NotNil(t, kept, "unrelated row preserved")
+}
+
+func TestStoreMigrateFailsOnClosedDB(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	require.NoError(t, db.Close()) // closed handle -> migrate errors
+
+	err = NewSQLStore(db).Migrate(context.Background())
+	require.Error(t, err)
+}
