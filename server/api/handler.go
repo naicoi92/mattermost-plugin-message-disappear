@@ -17,7 +17,7 @@ import (
 
 // PluginID is the manifest plugin id; Mattermost serves plugin HTTP under
 // /plugins/<id>/ and prefixes incoming paths accordingly.
-const PluginID = "com.github.naicoi92.disappearing-messages"
+const PluginID = "com.mattermost.plugin-message-disappear"
 
 // EventTTLChanged is the WebSocket event emitted whenever a channel's TTL
 // changes; the webapp (V2.3) listens for it to update the badge/button.

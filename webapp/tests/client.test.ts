@@ -16,7 +16,7 @@ it('getTTL builds the URL, encodes the id and parses ttl', async () => {
     fetchMock.mockResolvedValue(okResponse({ttl: {duration: 300, set_by: 'u1', set_at: 7}}));
     const t = await getTTL('ch 1');
     expect(fetchMock).toHaveBeenCalledWith(
-        '/plugins/com.github.naicoi92.disappearing-messages/ttl/ch%201',
+        '/plugins/com.mattermost.plugin-message-disappear/ttl/ch%201',
         expect.objectContaining({headers: expect.any(Object)}),
     );
     expect(t?.duration).toBe(300);
@@ -36,7 +36,7 @@ it('setTTL POSTs channel_id + ttl_seconds', async () => {
     fetchMock.mockResolvedValue(okResponse({}));
     await setTTL('ch1', 3600);
     const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('/plugins/com.github.naicoi92.disappearing-messages/ttl');
+    expect(url).toBe('/plugins/com.mattermost.plugin-message-disappear/ttl');
     expect(opts.method).toBe('POST');
     expect(opts.body).toBe(JSON.stringify({channel_id: 'ch1', ttl_seconds: 3600}));
 });
@@ -45,6 +45,6 @@ it('clearTTL DELETEs the channel TTL', async () => {
     fetchMock.mockResolvedValue(okResponse({}));
     await clearTTL('ch1');
     const [url, opts] = fetchMock.mock.calls[0] as [string, RequestInit];
-    expect(url).toBe('/plugins/com.github.naicoi92.disappearing-messages/ttl/ch1');
+    expect(url).toBe('/plugins/com.mattermost.plugin-message-disappear/ttl/ch1');
     expect(opts.method).toBe('DELETE');
 });

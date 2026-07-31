@@ -1,5 +1,5 @@
 {
-    "id": "com.github.naicoi92.disappearing-messages",
+    "id": "com.mattermost.plugin-message-disappear",
     "name": "Disappearing Messages",
     "description": "Brings Enterprise-grade hard-delete message retention to the Team edition: set a per-channel TTL and expired messages are purged from the database.",
     "homepage_url": "https://github.com/naicoi92/mattermost-plugin-message-disappear",
