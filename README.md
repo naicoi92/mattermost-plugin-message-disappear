@@ -15,9 +15,10 @@ Brings Enterprise-grade **hard-delete message retention** to the Mattermost
 
 Core lifecycle implemented: per-channel TTL (KV + presets + permission), HTTP API +
 `/disappear` slash command, webapp badge + selector modal, expire index (SQL),
-HA sweeper (`cluster.Schedule`), and a **transactional hard purge** gated by a
+HA sweeper (`cluster.Schedule`), a **transactional hard purge** gated by a
 schema-version guard (`PurgeSchemaAllowlist`) with an `EnablePurge` soft-delete
-fallback. Remaining: EE legal-hold coexist (V5) and release hardening (V6).
+fallback, and EE legal-hold coexist (hard purge on Team; soft-delete on
+Enterprise). Remaining: release hardening (V6).
 
 ## Known limitations
 

@@ -47,15 +47,15 @@ func (p *configPurger) Purge(ctx context.Context, postIDs []string) (int, error)
 	}
 	cfg := p.cfg.get()
 	switch purgeDecision(cfg.EnablePurge, p.api.GetLicense() != nil, p.api.GetServerVersion(), cfg.PurgeSchemaAllowlist()) {
-	case "soft":
+	case purgeSoft:
 		return p.softDelete(postIDs), nil
-	case "skip":
+	case purgeSkip:
 		// Fail-safe: untested MM schema -> touch nothing, alert, and return an error
 		// so the sweeper keeps the index rows for retry (returning nil would make the
 		// sweeper prune the rows, orphaning the posts from the plugin).
 		p.api.LogError("disappear: hard purge skipped — MM schema version not in allowlist (fail-safe)", "version", p.api.GetServerVersion())
 		return 0, errSchemaSkipped
-	default: // "hard"
+	default: // purgeHard
 		return p.hard.Purge(ctx, postIDs)
 	}
 }

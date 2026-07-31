@@ -20,11 +20,12 @@ func TestVersionAllowed(t *testing.T) {
 }
 
 func TestPurgeDecision(t *testing.T) {
-	assert.Equal(t, "soft", purgeDecision(false, false, "10.0.0", []string{"10."}), "EnablePurge off -> soft")
-	assert.Equal(t, "soft", purgeDecision(true, true, "10.5.0", []string{"10."}), "Enterprise -> soft (legal-hold safety)")
-	assert.Equal(t, "skip", purgeDecision(true, false, "9.0.0", []string{"10."}), "untested version -> skip (fail-safe)")
-	assert.Equal(t, "skip", purgeDecision(true, false, "10.0.0", nil), "empty allowlist -> skip")
-	assert.Equal(t, "hard", purgeDecision(true, false, "10.5.0", []string{"10.", "11."}), "Team + allowed -> hard")
+	assert.Equal(t, purgeSoft, purgeDecision(false, false, "10.0.0", []string{"10."}), "EnablePurge off -> soft")
+	assert.Equal(t, purgeSoft, purgeDecision(true, true, "10.5.0", []string{"10."}), "Enterprise -> soft (legal-hold safety)")
+	assert.Equal(t, purgeSoft, purgeDecision(true, true, "9.0.0", []string{"10."}), "EE + untested schema -> still soft (legal-hold trumps schema guard)")
+	assert.Equal(t, purgeSkip, purgeDecision(true, false, "9.0.0", []string{"10."}), "untested version -> skip (fail-safe)")
+	assert.Equal(t, purgeSkip, purgeDecision(true, false, "10.0.0", nil), "empty allowlist -> skip")
+	assert.Equal(t, purgeHard, purgeDecision(true, false, "10.5.0", []string{"10.", "11."}), "Team + allowed -> hard")
 }
 
 // --- configPurger fakes ---
