@@ -47,6 +47,15 @@ func (f *fakeKV) KVDelete(key string) *model.AppError {
 	return nil
 }
 
+// conflictKV always reports a CAS conflict, forcing the retry loop to exhaust.
+type conflictKV struct{}
+
+func (conflictKV) KVGet(string) ([]byte, *model.AppError) { return nil, nil }
+func (conflictKV) KVSetWithOptions(string, []byte, model.PluginKVSetOptions) (bool, *model.AppError) {
+	return false, nil
+}
+func (conflictKV) KVDelete(string) *model.AppError { return nil }
+
 // fakePerm is a programmable PermissionChecker for D2 tests.
 type fakePerm struct {
 	sysadmin   bool
@@ -115,23 +124,35 @@ func TestGetUnsetReturnsDefaultOFF(t *testing.T) {
 	assert.Nil(t, got, "unset channel must read as default OFF")
 }
 
-func TestKVStoreConcurrentSetExactlyOneSurvives(t *testing.T) {
+// Distinct concurrent writes must serialise: the store ends with exactly one
+// coherent value, drawn from the set of legitimate inputs (no torn write).
+func TestKVStoreConcurrentDistinctSetSerializes(t *testing.T) {
 	store := NewKVStore(newFakeKV())
-	const goroutines = 50
+	const goroutines = 25
+	inputs := make(map[int64]struct{}, goroutines)
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for range goroutines {
+	for i := range goroutines {
+		secs := int64(i + 1) // distinct: 1..25
+		inputs[secs] = struct{}{}
 		go func() {
 			defer wg.Done()
-			_ = store.Set("ch1", TTLSetting{DurationSeconds: 60, SetBy: "u", SetAt: 1})
+			_ = store.Set("ch1", TTLSetting{DurationSeconds: secs, SetBy: "u", SetAt: secs})
 		}()
 	}
 	wg.Wait()
 
 	got, err := store.Get("ch1")
 	require.NoError(t, err)
-	require.NotNil(t, got)
-	assert.Equal(t, int64(60), got.DurationSeconds)
+	require.NotNil(t, got, "exactly one value must survive")
+	_, ok := inputs[got.DurationSeconds]
+	assert.Truef(t, ok, "surviving value must be one of the distinct inputs, got %d", got.DurationSeconds)
+}
+
+func TestKVStoreSetRetriesExhausted(t *testing.T) {
+	store := NewKVStore(conflictKV{})
+	err := store.Set("ch1", TTLSetting{DurationSeconds: 60, SetBy: "u", SetAt: 1})
+	assert.ErrorIs(t, err, ErrTooManyRetries)
 }
 
 // --- service: permission (D2) ---
@@ -173,6 +194,20 @@ func TestSetTTLDMAllowsAnyParticipant(t *testing.T) {
 	perm := &fakePerm{channel: &model.Channel{Type: model.ChannelTypeDirect}}
 	svc := NewService(NewKVStore(newFakeKV()), perm)
 	require.NoError(t, svc.SetTTL(context.Background(), "u1", "dm1", time.Hour, time.UnixMilli(1)))
+}
+
+func TestSetTTLGroupAllowsParticipant(t *testing.T) {
+	// Group DM follows the same IsGroupOrDirect() path as DM (D2).
+	perm := &fakePerm{channel: &model.Channel{Type: model.ChannelTypeGroup}}
+	svc := NewService(NewKVStore(newFakeKV()), perm)
+	require.NoError(t, svc.SetTTL(context.Background(), "u1", "g1", time.Hour, time.UnixMilli(1)))
+}
+
+func TestClearTTLDeniesRegularMember(t *testing.T) {
+	perm := &fakePerm{channel: &model.Channel{Type: model.ChannelTypeOpen}}
+	svc := NewService(NewKVStore(newFakeKV()), perm)
+	err := svc.ClearTTL(context.Background(), "u1", "ch1")
+	assert.ErrorIs(t, err, ErrForbidden)
 }
 
 func TestSetTTLChannelNotFound(t *testing.T) {
