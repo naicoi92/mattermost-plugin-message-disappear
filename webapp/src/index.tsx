@@ -5,9 +5,7 @@ import ChannelHeaderButton from 'components/channel_header_button';
 import DisappearingHeaderIcon from 'components/header_icon';
 import TTLBadge from 'components/ttl_badge';
 import TTLSelectorModal from 'components/ttl_selector';
-import {clearTTL, setTTL} from 'client';
 import manifest from 'manifest';
-import {PRESETS} from 'presets';
 import reducer, {DisappearAction, GlobalState, openModal, setChannelTTL} from 'reducer';
 import type {PluginRegistry, WebSocketPayload} from 'types/mattermost-webapp';
 
@@ -39,21 +37,6 @@ export default class DisappearingMessagesPlugin {
                 'Disappearing Messages',
             );
         }
-
-        // Channel-header menu: quick-select TTL presets + Off + Custom (opens modal).
-        for (const p of PRESETS) {
-            registry.registerChannelHeaderMenuAction(`Disappearing: ${p.label}`, (channelID) => {
-                setTTL(channelID, p.seconds).catch(() => {
-                    // failure logged server-side; ttl_changed WS keeps the store honest
-                });
-            });
-        }
-        registry.registerChannelHeaderMenuAction('Disappearing: Off', (channelID) => {
-            clearTTL(channelID).catch(() => {});
-        });
-        registry.registerChannelHeaderMenuAction('Disappearing: Custom\u2026', (channelID) => {
-            dispatch(openModal(channelID));
-        });
 
         registry.registerWebSocketEventHandler('ttl_changed', (payload: WebSocketPayload) => {
             if (payload.channel_id) {
