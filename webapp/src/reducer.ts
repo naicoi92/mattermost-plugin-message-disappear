@@ -1,7 +1,11 @@
 import type {Reducer} from 'redux';
 import type {TTLInfo} from 'client';
+import manifest from 'manifest';
 
-export const REDUCER_KEY = 'disappearingMessages';
+// Mattermost mounts every reducer a plugin registers via registry.registerReducer
+// under state['plugins-<pluginId>'] (NOT a root key of our choosing). Selectors must
+// read from there or the UI never sees the state and stays "Off".
+export const PLUGIN_REDUCER_KEY = 'plugins-' + manifest.id;
 
 export interface DisappearState {
     // channelId -> TTL (null = explicitly off; absent = not yet loaded)
@@ -48,18 +52,18 @@ const reducer: Reducer<DisappearState, DisappearAction> = (state = initialState,
 
 export default reducer;
 
-// Selectors read the plugin's slice off the global Mattermost webapp store.
-export type GlobalSlice = {[REDUCER_KEY]?: DisappearState};
+// Selectors read the plugin's slice from state['plugins-<pluginId>'], where MM
+// mounts registered plugin reducers.
+export type GlobalSlice = Record<string, unknown>;
 
 // GlobalState is the part of the Mattermost webapp store this plugin touches:
-// the current channel id (mattermost-redux) plus our slice. A superset of
-// GlobalSlice, so it is accepted by the selectors above.
+// the current channel id (mattermost-redux) plus the plugins-<id> slice.
 export interface GlobalState {
     entities: {channels: {currentChannelId: string}};
-    [REDUCER_KEY]?: DisappearState;
     [k: string]: unknown;
 }
-const slice = (state: GlobalSlice): DisappearState => state[REDUCER_KEY] ?? initialState;
+const slice = (state: GlobalSlice): DisappearState =>
+    (state[PLUGIN_REDUCER_KEY] as DisappearState | undefined) ?? initialState;
 
 export const selectChannelTTL = (state: GlobalSlice, channelId: string): TTLInfo | null | undefined =>
     slice(state).byChannel[channelId];
