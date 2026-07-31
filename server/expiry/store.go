@@ -28,6 +28,10 @@ type ExpireIndexStore interface {
 	UpdateExpireByRoot(ctx context.Context, rootID string, expireAtMs int64) error
 	// GetByPostID loads the row for a post, or nil when absent.
 	GetByPostID(ctx context.Context, postID string) (*Entry, error)
+	// GetExpired returns up to limit rows whose expire_at <= nowMs, oldest first.
+	GetExpired(ctx context.Context, nowMs int64, limit int) ([]Entry, error)
+	// DeleteByPostID removes a row (after the post is deleted / found stale).
+	DeleteByPostID(ctx context.Context, postID string) error
 }
 
 // NewSQLStore wraps a Mattermost master DB handle as an ExpireIndexStore.
@@ -54,8 +58,7 @@ CREATE INDEX IF NOT EXISTS idx_mpmd_expire_root ON mpmd_expire (root_id);
 `
 
 func (s *sqlStore) Migrate(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, ddl)
-	if err != nil {
+	if _, err := s.db.ExecContext(ctx, ddl); err != nil {
 		return fmt.Errorf("expire: migrate: %w", err)
 	}
 	return nil
@@ -71,8 +74,7 @@ ON CONFLICT(post_id) DO UPDATE SET
 `
 
 func (s *sqlStore) Upsert(ctx context.Context, e Entry) error {
-	_, err := s.db.ExecContext(ctx, upsertSQL, e.PostID, e.ChannelID, e.RootID, e.ExpireAt, e.CreatedAt)
-	if err != nil {
+	if _, err := s.db.ExecContext(ctx, upsertSQL, e.PostID, e.ChannelID, e.RootID, e.ExpireAt, e.CreatedAt); err != nil {
 		return fmt.Errorf("expire: upsert %q: %w", e.PostID, err)
 	}
 	return nil
@@ -81,8 +83,7 @@ func (s *sqlStore) Upsert(ctx context.Context, e Entry) error {
 const updateByRootSQL = `UPDATE mpmd_expire SET expire_at = ? WHERE root_id = ?;`
 
 func (s *sqlStore) UpdateExpireByRoot(ctx context.Context, rootID string, expireAtMs int64) error {
-	_, err := s.db.ExecContext(ctx, updateByRootSQL, expireAtMs, rootID)
-	if err != nil {
+	if _, err := s.db.ExecContext(ctx, updateByRootSQL, expireAtMs, rootID); err != nil {
 		return fmt.Errorf("expire: bump thread %q: %w", rootID, err)
 	}
 	return nil
@@ -101,4 +102,33 @@ func (s *sqlStore) GetByPostID(ctx context.Context, postID string) (*Entry, erro
 		return nil, fmt.Errorf("expire: get %q: %w", postID, err)
 	}
 	return &e, nil
+}
+
+const getExpiredSQL = `SELECT post_id, channel_id, root_id, expire_at, created_at FROM mpmd_expire WHERE expire_at <= ? ORDER BY expire_at LIMIT ?;`
+
+func (s *sqlStore) GetExpired(ctx context.Context, nowMs int64, limit int) ([]Entry, error) {
+	rows, err := s.db.QueryContext(ctx, getExpiredSQL, nowMs, limit)
+	if err != nil {
+		return nil, fmt.Errorf("expire: query expired: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Entry
+	for rows.Next() {
+		var e Entry
+		if err := rows.Scan(&e.PostID, &e.ChannelID, &e.RootID, &e.ExpireAt, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("expire: scan expired: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+const deleteByPostSQL = `DELETE FROM mpmd_expire WHERE post_id = ?;`
+
+func (s *sqlStore) DeleteByPostID(ctx context.Context, postID string) error {
+	if _, err := s.db.ExecContext(ctx, deleteByPostSQL, postID); err != nil {
+		return fmt.Errorf("expire: delete %q: %w", postID, err)
+	}
+	return nil
 }
