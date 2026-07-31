@@ -78,7 +78,11 @@ bundle:  ## Assemble the installable plugin tarball
 	cp -r server/dist dist/$(PLUGIN_ID)/server/
 	cp -r webapp/dist dist/$(PLUGIN_ID)/webapp/
 	cp plugin.json dist/$(PLUGIN_ID)/
-	cd dist && tar -czf $(PLUGIN_ID)-$(PLUGIN_VERSION).tar.gz $(PLUGIN_ID)
+ifeq ($(shell uname),Darwin)
+	cd dist && tar --disable-copyfile -cvzf $(PLUGIN_ID)-$(PLUGIN_VERSION).tar.gz $(PLUGIN_ID)
+else
+	cd dist && tar -cvzf $(PLUGIN_ID)-$(PLUGIN_VERSION).tar.gz $(PLUGIN_ID)
+endif
 	@echo "bundle: $(BUNDLE)"
 
 .PHONY: dist
