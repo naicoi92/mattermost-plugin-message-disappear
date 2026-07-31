@@ -16,23 +16,28 @@ export default class DisappearingMessagesPlugin {
         // redux v5's Dispatch<union> overload does not resolve for union action
         // types, so narrow dispatch to take our actions directly.
         const dispatch = store.dispatch as (action: DisappearAction) => void;
-        const currentChannelId = () => store.getState().entities.channels.currentChannelId;
 
         registry.registerReducer(reducer);
         registry.registerRootComponent(TTLSelectorModal as ComponentType<unknown>);
         registry.registerPostMessageAttachmentComponent(TTLBadge);
 
         // Channel header: prefer registerChannelHeaderIcon (Mattermost 11.5+) — it
-        // renders a full status component (⏱ + duration, clickable) in the LEFT icon
-        // section next to the pinned-posts button. Fall back to
+        // renders the dropdown button in the LEFT icon section next to the pinned-posts
+        // button and passes the channel as a prop. Fall back to
         // registerChannelHeaderButtonAction (10.x–11.4, icon-only button in the right
-        // slot) so the plugin never crashes on an older supported server.
+        // slot); its action receives the channel too. Neither path reads
+        // currentChannelId from redux (that sent an id the server rejected as
+        // "channel not found").
         if (typeof registry.registerChannelHeaderIcon === 'function') {
             registry.registerChannelHeaderIcon(ChannelHeaderButton as ComponentType<unknown>);
         } else {
             registry.registerChannelHeaderButtonAction(
                 DisappearingHeaderIcon as ComponentType<unknown>,
-                () => dispatch(openModal(currentChannelId())),
+                (channel) => {
+                    if (channel?.id) {
+                        dispatch(openModal(channel.id));
+                    }
+                },
                 'Disappearing',
                 'Disappearing Messages',
             );

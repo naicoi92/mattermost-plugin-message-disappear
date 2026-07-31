@@ -35,7 +35,7 @@ export interface PluginRegistry {
     registerChannelHeaderIcon?(component: ComponentType<unknown>): void;
     registerChannelHeaderButtonAction(
         icon: ComponentType<unknown>,
-        action: () => void,
+        action: (channel?: {id: string}) => void,
         dropdownText: string,
         tooltipText: string,
     ): void;

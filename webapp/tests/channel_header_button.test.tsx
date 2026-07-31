@@ -1,17 +1,7 @@
 // Component test for the channel-header TTL dropdown button (MPMD-32).
-// The component is fully isolated: react-redux, the TTL hook and the client are
-// mocked, so we assert pure render + interaction behaviour.
+// The component receives the channel as a prop (passed by registerChannelHeaderIcon's
+// Pluggable); the TTL hook and the client are mocked, so we assert pure behaviour.
 import {fireEvent, render, screen, within} from '@testing-library/react';
-
-jest.mock('react-redux', () => ({
-    useSelector: (selector: (s: unknown) => unknown) => selector({
-        entities: {
-            channels: {currentChannelId: 'ch-current'},
-            posts: {posts: {}},
-        },
-    }),
-    useDispatch: () => mockDispatch,
-}));
 
 jest.mock('client', () => ({
     setTTL: jest.fn(),
@@ -24,67 +14,57 @@ jest.mock('hooks/use_channel_ttl', () => ({
     useChannelTTL: () => mockTtlValue,
 }));
 
-// Imported after jest.mock so they resolve to the mocked fns.
 import {setTTL, clearTTL} from 'client';
-import {openModal} from 'reducer';
 import ChannelHeaderButton from 'components/channel_header_button';
 
-const mockDispatch = jest.fn();
-
+const props = {channel: {id: 'ch-current'}};
 const toggle = () => screen.getByRole('button', {name: /disappearing/i});
 
 beforeEach(() => {
     (setTTL as jest.Mock).mockClear();
     (clearTTL as jest.Mock).mockClear();
-    mockDispatch.mockClear();
     mockTtlValue = null;
 });
 
-it('shows "Off" label when no TTL is set, and the duration when one is', () => {
-    const {rerender} = render(<ChannelHeaderButton/>);
+it('shows "Off" when no TTL is set, and the duration when one is', () => {
+    const {rerender} = render(<ChannelHeaderButton {...props}/>);
     expect(toggle()).toHaveTextContent('Off');
 
     mockTtlValue = {duration: 86400, set_by: 'u', set_at: 1};
-    rerender(<ChannelHeaderButton/>);
+    rerender(<ChannelHeaderButton {...props}/>);
     expect(toggle()).toHaveTextContent('1d');
 });
 
-it('opens the preset dropdown on click and lists Off + presets + Custom', () => {
-    render(<ChannelHeaderButton/>);
+it('opens the preset dropdown on click (Off + presets, no Custom)', () => {
+    render(<ChannelHeaderButton {...props}/>);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     fireEvent.click(toggle());
+
     const menu = screen.getByRole('menu');
-    expect(menu).toBeInTheDocument();
-    expect(within(menu).getByRole('button', {name: /off/i})).toBeInTheDocument();
-    expect(within(menu).getByRole('button', {name: '1d'})).toBeInTheDocument();
-    expect(within(menu).getByRole('button', {name: '1w'})).toBeInTheDocument();
-    expect(within(menu).getByRole('button', {name: /custom/i})).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', {name: /off/i})).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', {name: '1d'})).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', {name: '1w'})).toBeInTheDocument();
+    // No Custom entry — quick presets only.
+    expect(screen.queryByRole('menuitem', {name: /custom/i})).not.toBeInTheDocument();
 });
 
-it('selecting a preset sets the channel TTL with the right duration and closes', async () => {
-    render(<ChannelHeaderButton/>);
+it('selecting a preset sets the channel TTL with the right duration and closes', () => {
+    render(<ChannelHeaderButton {...props}/>);
     fireEvent.click(toggle());
-    fireEvent.click(screen.getByRole('button', {name: '1d'}));
+    fireEvent.click(screen.getByRole('menuitem', {name: '1d'}));
     expect(setTTL).toHaveBeenCalledWith('ch-current', 86400);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 });
 
 it('selecting Off clears the TTL', () => {
-    render(<ChannelHeaderButton/>);
+    render(<ChannelHeaderButton {...props}/>);
     fireEvent.click(toggle());
-    fireEvent.click(screen.getByRole('button', {name: /^off$/i}));
+    fireEvent.click(screen.getByRole('menuitem', {name: /^off$/i}));
     expect(clearTTL).toHaveBeenCalledWith('ch-current');
 });
 
-it('selecting Custom opens the duration modal', () => {
-    render(<ChannelHeaderButton/>);
-    fireEvent.click(toggle());
-    fireEvent.click(screen.getByRole('button', {name: /custom/i}));
-    expect(mockDispatch).toHaveBeenCalledWith(openModal('ch-current'));
-});
-
 it('closes on Escape and on outside click', () => {
-    render(<ChannelHeaderButton/>);
+    render(<ChannelHeaderButton {...props}/>);
     fireEvent.click(toggle());
     expect(screen.getByRole('menu')).toBeInTheDocument();
 

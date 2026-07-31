@@ -1,20 +1,20 @@
 import {useEffect, useRef, useState} from 'react';
-import {useDispatch, useSelector} from 'react-redux';
 
 import {useChannelTTL} from 'hooks/use_channel_ttl';
 import {clearTTL, setTTL} from 'client';
-import {DisappearAction, GlobalState, openModal} from 'reducer';
 import {PRESETS, shortDuration} from 'presets';
 
 // ChannelHeaderButton is registered via registerChannelHeaderIcon (Mattermost
-// 11.5+), which renders it in the left icon section of the channel header as a
-// full component. It is a small button showing ⏱ + the current TTL ("Off" or a
-// short duration); clicking it opens a dropdown to pick a preset, turn TTL off,
-// or open the custom-duration modal. registerChannelHeaderIcon has no action
-// callback, so the click + dropdown live entirely inside this component.
-export default function ChannelHeaderButton() {
-    const dispatch = useDispatch() as (action: DisappearAction) => void;
-    const channelId = useSelector((state: GlobalState) => state.entities.channels.currentChannelId);
+// 11.5+). The webapp renders it in the channel header and passes the `channel`
+// (and channelMember) as props; we use channel.id as the authoritative channel id.
+// (Reading state.entities.channels.currentChannelId from redux previously sent an
+// id the server rejected with "ttl: channel not found".)
+//
+// It is a small button showing ⏱ + the current TTL ("Off" or a short duration);
+// clicking opens a dropdown of presets + Off for fast setup. registerChannelHeaderIcon
+// has no action callback, so the click + dropdown live entirely in this component.
+export default function ChannelHeaderButton({channel}: {channel?: {id: string}}) {
+    const channelId = channel?.id ?? '';
     const ttl = useChannelTTL(channelId);
     const [open, setOpen] = useState(false);
     const rootRef = useRef<HTMLDivElement>(null);
@@ -71,6 +71,7 @@ export default function ChannelHeaderButton() {
                 <div className='disappear-menu' role='menu'>
                     <button
                         type='button'
+                        role='menuitem'
                         className='disappear-menuitem'
                         onClick={() => choose(() => clearTTL(channelId))}
                     >
@@ -80,6 +81,7 @@ export default function ChannelHeaderButton() {
                         <button
                             key={p.seconds}
                             type='button'
+                            role='menuitem'
                             className='disappear-menuitem'
                             aria-current={ttl?.duration === p.seconds || undefined}
                             onClick={() => choose(() => setTTL(channelId, p.seconds))}
@@ -87,13 +89,6 @@ export default function ChannelHeaderButton() {
                             {p.shortLabel}
                         </button>
                     ))}
-                    <button
-                        type='button'
-                        className='disappear-menuitem'
-                        onClick={() => choose(() => dispatch(openModal(channelId)))}
-                    >
-                        {'Custom\u2026'}
-                    </button>
                 </div>
             )}
         </div>
