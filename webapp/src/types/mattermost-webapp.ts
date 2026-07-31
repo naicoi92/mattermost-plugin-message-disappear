@@ -29,6 +29,10 @@ export interface WebSocketPayload {
 export type ReactResolvable = string | ComponentType<unknown>;
 
 export interface PluginRegistry {
+    // Mattermost 11.5+: renders a component in the LEFT icon section of the channel
+    // header (next to the pinned-posts button) as a full component. Optional because it
+    // is absent in 10.x–11.4; gate usage with `typeof ... === 'function'`.
+    registerChannelHeaderIcon?(component: ComponentType<unknown>): void;
     registerChannelHeaderButtonAction(
         icon: ComponentType<unknown>,
         action: () => void,
@@ -41,7 +45,9 @@ export interface PluginRegistry {
         action: (channelID: string) => void,
         shouldRender?: (state: Record<string, unknown>) => boolean,
     ): void;
-    registerPostWillRenderHook(component: ComponentType<PostRenderArgs>, options?: {id?: string}): void;
+    // Renders a component at the bottom of every post's message; the component
+    // receives `postId` (not the full post). Return null when there's nothing to show.
+    registerPostMessageAttachmentComponent(component: ComponentType<{postId?: string}>): void;
     registerRootComponent(component: ComponentType<unknown>): void;
     registerWebSocketEventHandler(event: string, handler: (payload: WebSocketPayload) => void): void;
     registerReducer<S, A extends Action = Action>(reducer: Reducer<S, A>): void;

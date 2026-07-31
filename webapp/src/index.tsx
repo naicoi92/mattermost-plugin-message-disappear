@@ -2,6 +2,7 @@ import type {ComponentType} from 'react';
 import type {Store} from 'redux';
 
 import ChannelHeaderButton from 'components/channel_header_button';
+import DisappearingHeaderIcon from 'components/header_icon';
 import TTLBadge from 'components/ttl_badge';
 import TTLSelectorModal from 'components/ttl_selector';
 import {clearTTL, setTTL} from 'client';
@@ -21,16 +22,23 @@ export default class DisappearingMessagesPlugin {
 
         registry.registerReducer(reducer);
         registry.registerRootComponent(TTLSelectorModal as ComponentType<unknown>);
-        registry.registerPostWillRenderHook(TTLBadge);
+        registry.registerPostMessageAttachmentComponent(TTLBadge);
 
-        // Channel-header status button: shows ⏱ + duration (on) or a muted ⏱ (off);
-        // click opens the TTL selector modal for the current channel.
-        registry.registerChannelHeaderButtonAction(
-            ChannelHeaderButton as ComponentType<unknown>,
-            () => dispatch(openModal(currentChannelId())),
-            'Disappearing',
-            'Disappearing Messages',
-        );
+        // Channel header: prefer registerChannelHeaderIcon (Mattermost 11.5+) — it
+        // renders a full status component (⏱ + duration, clickable) in the LEFT icon
+        // section next to the pinned-posts button. Fall back to
+        // registerChannelHeaderButtonAction (10.x–11.4, icon-only button in the right
+        // slot) so the plugin never crashes on an older supported server.
+        if (typeof registry.registerChannelHeaderIcon === 'function') {
+            registry.registerChannelHeaderIcon(ChannelHeaderButton as ComponentType<unknown>);
+        } else {
+            registry.registerChannelHeaderButtonAction(
+                DisappearingHeaderIcon as ComponentType<unknown>,
+                () => dispatch(openModal(currentChannelId())),
+                'Disappearing',
+                'Disappearing Messages',
+            );
+        }
 
         // Channel-header menu: quick-select TTL presets + Off + Custom (opens modal).
         for (const p of PRESETS) {

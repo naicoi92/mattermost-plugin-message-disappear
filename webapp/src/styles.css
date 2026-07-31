@@ -11,6 +11,7 @@
     align-items: center;
     gap: 2px;
     font-size: 0.9em;
+    cursor: pointer;
 }
 
 .disappear-header-icon--off {
