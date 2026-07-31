@@ -23,6 +23,13 @@ linters:
       enable-all: true
       disable:
         - fieldalignment
+    gosec:
+      # G201/G202 flag SQL string formatting/concatenation. They are false
+      # positives here: dynamic IN clauses use generated placeholders with
+      # parameterized args; table/column names are package constants.
+      excludes:
+        - G201
+        - G202
     revive:
       rules:
         - name: exported

@@ -3,10 +3,8 @@ package sweeper
 import (
 	"context"
 	"errors"
-	"net/http"
 	"testing"
 
-	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -28,32 +26,19 @@ func (f *fakeStore) GetExpired(_ context.Context, _ int64, _ int) ([]expiry.Entr
 	return out, f.getErr
 }
 
-func (f *fakeStore) DeleteByPostID(_ context.Context, postID string) error {
-	f.pruned = append(f.pruned, postID)
+func (f *fakeStore) DeleteByPostIDs(_ context.Context, postIDs []string) error {
+	f.pruned = append(f.pruned, postIDs...)
 	return f.delErr
 }
 
-type fakePosts struct {
-	existing   map[string]bool            // postID -> exists (GetPost returns the post)
-	getPostErr map[string]*model.AppError // postID -> explicit GetPost error (overrides existing)
-	deleted    []string                   // DeletePost call order
-	deleteErr  map[string]*model.AppError // postID -> error returned by DeletePost
+type fakePurger struct {
+	calls [][]string
+	err   error
 }
 
-func (f *fakePosts) GetPost(id string) (*model.Post, *model.AppError) {
-	if e, ok := f.getPostErr[id]; ok {
-		return nil, e
-	}
-	if f.existing[id] {
-		return &model.Post{Id: id}, nil
-	}
-	// Not in existing -> treated as gone (MM returns 404 for missing posts).
-	return nil, &model.AppError{StatusCode: http.StatusNotFound}
-}
-
-func (f *fakePosts) DeletePost(id string) *model.AppError {
-	f.deleted = append(f.deleted, id)
-	return f.deleteErr[id]
+func (p *fakePurger) Purge(_ context.Context, postIDs []string) (int, error) {
+	p.calls = append(p.calls, append([]string(nil), postIDs...))
+	return len(postIDs), p.err
 }
 
 type captureLogger struct {
@@ -64,103 +49,73 @@ func (l *captureLogger) LogError(msg string, _ ...any) {
 	l.errors = append(l.errors, msg)
 }
 
-func newSweeper(store *fakeStore, posts *fakePosts) (*Sweeper, *captureLogger) {
+func newSweeper(store *fakeStore, purger *fakePurger) (*Sweeper, *captureLogger) {
 	log := &captureLogger{}
-	return New(store, posts, log, 10), log
+	return New(store, purger, log, 10), log
 }
 
 // --- tests ---
 
-func TestRunDeletesExpiredAndPrunes(t *testing.T) {
+func TestRunPurgesBatchAndPrunes(t *testing.T) {
 	store := &fakeStore{expired: []expiry.Entry{{PostID: "p1"}, {PostID: "p2"}}}
-	posts := &fakePosts{existing: map[string]bool{"p1": true, "p2": true}, deleteErr: map[string]*model.AppError{}}
-	sw, log := newSweeper(store, posts)
+	purger := &fakePurger{}
+	sw, log := newSweeper(store, purger)
 
 	sw.Run()
 
-	assert.Equal(t, []string{"p1", "p2"}, posts.deleted, "both expired posts soft-deleted")
+	require.Len(t, purger.calls, 1)
+	assert.Equal(t, []string{"p1", "p2"}, purger.calls[0], "whole batch purged in one call")
 	assert.Equal(t, []string{"p1", "p2"}, store.pruned, "both rows pruned")
 	assert.Empty(t, log.errors)
 }
 
-func TestRunStalePostPrunesWithoutError(t *testing.T) {
-	// p3 already removed by the user -> DeletePost errors, GetPost returns 404.
-	store := &fakeStore{expired: []expiry.Entry{{PostID: "p3"}}}
-	posts := &fakePosts{existing: map[string]bool{}, deleteErr: map[string]*model.AppError{"p3": {}}}
-	sw, log := newSweeper(store, posts)
-
-	sw.Run()
-
-	assert.Contains(t, posts.deleted, "p3")
-	assert.Equal(t, []string{"p3"}, store.pruned, "stale (404) row pruned")
-	assert.Empty(t, log.errors, "stale handling is not an error")
-}
-
-func TestRunTransientDeleteKeepsRowForRetry(t *testing.T) {
-	// p4 still exists (GetPost found) but DeletePost transiently fails -> keep row.
-	store := &fakeStore{expired: []expiry.Entry{{PostID: "p4"}}}
-	posts := &fakePosts{existing: map[string]bool{"p4": true}, deleteErr: map[string]*model.AppError{"p4": {}}}
-	sw, log := newSweeper(store, posts)
-
-	sw.Run()
-
-	assert.Contains(t, posts.deleted, "p4")
-	assert.Empty(t, store.pruned, "row kept so the post is retried next tick")
-	require.Len(t, log.errors, 1)
-}
-
-func TestRunTransientGetPostKeepsRowForRetry(t *testing.T) {
-	// DeletePost fails AND GetPost fails with a non-404 (transient) -> must NOT prune.
-	store := &fakeStore{expired: []expiry.Entry{{PostID: "p5"}}}
-	posts := &fakePosts{
-		existing:   map[string]bool{},
-		getPostErr: map[string]*model.AppError{"p5": {StatusCode: http.StatusInternalServerError}},
-		deleteErr:  map[string]*model.AppError{"p5": {}},
-	}
-	sw, log := newSweeper(store, posts)
-
-	sw.Run()
-
-	assert.Contains(t, posts.deleted, "p5")
-	assert.Empty(t, store.pruned, "transient lookup must not prune the row (post may still exist)")
-	require.Len(t, log.errors, 1)
-}
-
 func TestRunNoExpiredIsNoOp(t *testing.T) {
 	store := &fakeStore{}
-	posts := &fakePosts{existing: map[string]bool{}, deleteErr: map[string]*model.AppError{}}
-	sw, log := newSweeper(store, posts)
+	purger := &fakePurger{}
+	sw, log := newSweeper(store, purger)
 
 	sw.Run()
 
-	assert.Empty(t, posts.deleted)
+	assert.Empty(t, purger.calls)
 	assert.Empty(t, store.pruned)
 	assert.Empty(t, log.errors)
 }
 
-func TestRunQueryErrorLogsAndStops(t *testing.T) {
-	store := &fakeStore{expired: []expiry.Entry{{PostID: "p1"}}, getErr: errors.New("db down")}
-	posts := &fakePosts{existing: map[string]bool{"p1": true}, deleteErr: map[string]*model.AppError{}}
-	sw, log := newSweeper(store, posts)
+func TestRunPurgeErrorKeepsRowsForRetry(t *testing.T) {
+	store := &fakeStore{expired: []expiry.Entry{{PostID: "p1"}}}
+	purger := &fakePurger{err: errors.New("tx failed")}
+	sw, log := newSweeper(store, purger)
 
 	sw.Run()
 
-	assert.Empty(t, posts.deleted, "no deletion when the query fails")
+	require.Len(t, purger.calls, 1)
+	assert.Empty(t, store.pruned, "rows kept so the batch is retried next tick (no partial purge)")
 	require.Len(t, log.errors, 1)
 }
 
-func TestPruneErrorIsLogged(t *testing.T) {
-	store := &fakeStore{expired: []expiry.Entry{{PostID: "p1"}}, delErr: errors.New("delete row failed")}
-	posts := &fakePosts{existing: map[string]bool{"p1": true}, deleteErr: map[string]*model.AppError{}}
-	sw, log := newSweeper(store, posts)
+func TestRunQueryErrorLogsAndStops(t *testing.T) {
+	store := &fakeStore{expired: []expiry.Entry{{PostID: "p1"}}, getErr: errors.New("db down")}
+	purger := &fakePurger{}
+	sw, log := newSweeper(store, purger)
 
 	sw.Run()
 
-	assert.Contains(t, posts.deleted, "p1", "post still deleted")
+	assert.Empty(t, purger.calls, "no purge when the query fails")
+	require.Len(t, log.errors, 1)
+}
+
+func TestRunPruneErrorIsLogged(t *testing.T) {
+	store := &fakeStore{expired: []expiry.Entry{{PostID: "p1"}}, delErr: errors.New("prune failed")}
+	purger := &fakePurger{}
+	sw, log := newSweeper(store, purger)
+
+	sw.Run()
+
+	require.Len(t, purger.calls, 1, "posts still purged")
 	require.Len(t, log.errors, 1, "prune failure is logged")
 }
 
 func TestNewDefaultsBatchSize(t *testing.T) {
-	sw := New(&fakeStore{}, &fakePosts{existing: map[string]bool{}, deleteErr: map[string]*model.AppError{}}, &captureLogger{}, 0)
+	sw := New(&fakeStore{}, &fakePurger{}, &captureLogger{}, 0)
 	assert.Equal(t, defaultBatchSize, sw.batchSize)
 }

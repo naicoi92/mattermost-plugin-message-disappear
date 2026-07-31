@@ -12,6 +12,7 @@ import (
 
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/api"
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/expiry"
+	"github.com/naicoi92/mattermost-plugin-message-disappear/server/purge"
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/sweeper"
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/ttl"
 )
@@ -21,9 +22,8 @@ const sweeperInterval = 60 * time.Second
 // Plugin implements the Mattermost server plugin hooks.
 //
 // Disappearing-messages lifecycle: TTL set (V2) -> expire index (V3.1) ->
-// sweeper soft-delete (V3.2) -> transactional hard purge (V4). This wiring
-// activates the TTL service, the HTTP/slash API, the expire index, and the
-// HA sweeper.
+// sweeper + transactional hard purge (V3.2/V4). This wiring activates the TTL
+// service, the HTTP/slash API, the expire index, the HA sweeper and the Purger.
 type Plugin struct {
 	plugin.MattermostPlugin
 
@@ -32,12 +32,13 @@ type Plugin struct {
 	apiHandler    *api.Handler
 	expireStore   expiry.ExpireIndexStore
 	expiryService *expiry.Service
+	purger        purge.Purger
 	sweeper       *sweeper.Sweeper
 	sweeperJob    *cluster.Job
 }
 
 // OnActivate wires the TTL service, the HTTP/slash API surface, the /disappear
-// command, and — when DB access is available — the expire index + HA sweeper.
+// command, and — when DB access is available — the expire index + Purger + HA sweeper.
 func (p *Plugin) OnActivate() error {
 	p.API.LogInfo("Disappearing Messages plugin activated")
 
@@ -50,8 +51,8 @@ func (p *Plugin) OnActivate() error {
 		p.API.LogError("failed to register /disappear command", "err", err)
 	}
 
-	// The expire index needs the master DB; if unavailable, the plugin degrades
-	// gracefully — TTL set/view/off still work, only auto-delete is off.
+	// The expire index + Purger need the master DB; if unavailable, the plugin
+	// degrades gracefully — TTL set/view/off still work, only auto-delete is off.
 	if p.Driver != nil {
 		if err := p.initExpiry(context.Background()); err != nil {
 			p.API.LogError("disappear: expire index disabled", "err", err)
@@ -63,7 +64,7 @@ func (p *Plugin) OnActivate() error {
 }
 
 // initExpiry opens the master DB, migrates the expire-index table, and wires the
-// ExpiryService. Returns nil on success or an error (expiry disabled).
+// ExpiryService and the transactional Purger. Returns nil on success or an error.
 func (p *Plugin) initExpiry(ctx context.Context) error {
 	db, err := p.client.Store.GetMasterDB()
 	if err != nil {
@@ -74,12 +75,13 @@ func (p *Plugin) initExpiry(ctx context.Context) error {
 		return err
 	}
 	p.expiryService = expiry.NewService(p.expireStore, p.ttlService)
+	p.purger = purge.NewSQLPurger(db)
 	return nil
 }
 
 // initSweeper schedules the single-node HA sweeper (cluster.Schedule).
 func (p *Plugin) initSweeper() error {
-	p.sweeper = sweeper.New(p.expireStore, p.API, p.API, 500)
+	p.sweeper = sweeper.New(p.expireStore, p.purger, p.API, 500)
 	job, err := cluster.Schedule(p.API, "disappear_sweeper", cluster.MakeWaitForRoundedInterval(sweeperInterval), p.sweeper.Run)
 	if err != nil {
 		return err
