@@ -50,6 +50,15 @@ export default reducer;
 
 // Selectors read the plugin's slice off the global Mattermost webapp store.
 export type GlobalSlice = {[REDUCER_KEY]?: DisappearState};
+
+// GlobalState is the part of the Mattermost webapp store this plugin touches:
+// the current channel id (mattermost-redux) plus our slice. A superset of
+// GlobalSlice, so it is accepted by the selectors above.
+export interface GlobalState {
+    entities: {channels: {currentChannelId: string}};
+    [REDUCER_KEY]?: DisappearState;
+    [k: string]: unknown;
+}
 const slice = (state: GlobalSlice): DisappearState => state[REDUCER_KEY] ?? initialState;
 
 export const selectChannelTTL = (state: GlobalSlice, channelId: string): TTLInfo | null | undefined =>

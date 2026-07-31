@@ -26,8 +26,21 @@ export interface WebSocketPayload {
     ttl?: TTLInfoDTO | null;
 }
 
+export type ReactResolvable = string | ComponentType<unknown>;
+
 export interface PluginRegistry {
-    registerChannelHeaderButtonAction(icon: ComponentType<unknown>, action: (...args: unknown[]) => void, dropdownText?: string): void;
+    registerChannelHeaderButtonAction(
+        icon: ComponentType<unknown>,
+        action: () => void,
+        dropdownText: string,
+        tooltipText: string,
+    ): void;
+    // Adds an item to the channel-header dropdown menu; action receives the channel id.
+    registerChannelHeaderMenuAction(
+        text: ReactResolvable,
+        action: (channelID: string) => void,
+        shouldRender?: (state: Record<string, unknown>) => boolean,
+    ): void;
     registerPostWillRenderHook(component: ComponentType<PostRenderArgs>, options?: {id?: string}): void;
     registerRootComponent(component: ComponentType<unknown>): void;
     registerWebSocketEventHandler(event: string, handler: (payload: WebSocketPayload) => void): void;

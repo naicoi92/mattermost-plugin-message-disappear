@@ -3,16 +3,7 @@ import {useDispatch, useSelector} from 'react-redux';
 
 import {clearTTL, getTTL, setTTL, TTLInfo} from 'client';
 import {closeModal, DisappearAction, GlobalSlice, selectModalChannel, setChannelTTL} from 'reducer';
-
-// Presets mirror the server (server/ttl/ttl.go); "30s" is intentionally absent
-// (the server's minimum TTL is 1 minute).
-const PRESETS = [
-    {label: '5 minutes', seconds: 300},
-    {label: '1 hour', seconds: 3600},
-    {label: '8 hours', seconds: 28800},
-    {label: '1 day', seconds: 86400},
-    {label: '1 week', seconds: 604800},
-];
+import {PRESETS} from 'presets';
 
 const MIN_SECONDS = 60;
 const MAX_SECONDS = 365 * 24 * 3600;
