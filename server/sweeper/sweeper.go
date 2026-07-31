@@ -4,6 +4,7 @@ package sweeper
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -69,12 +70,14 @@ func (s *Sweeper) Run() {
 }
 
 // sweepOne deletes one post (soft) and prunes its index row.
-//   - post already gone (stale): prune the row, no error.
-//   - delete transiently fails: keep the row to retry next tick.
+//   - post already gone (stale, 404): prune the row, no error.
+//   - delete transiently fails, or the lookup itself fails: keep the row to retry.
 func (s *Sweeper) sweepOne(ctx context.Context, postID string) {
 	if appErr := s.posts.DeletePost(postID); appErr != nil {
-		if _, getErr := s.posts.GetPost(postID); getErr != nil {
-			// Post no longer exists -> stale orphan row; prune it (idempotent).
+		// A confirmed 404 means the post was removed by the user/native retention
+		// -> prune the stale row. Any other GetPost outcome (post still present, or
+		// the lookup itself transiently failed) keeps the row so the post is retried.
+		if _, getErr := s.posts.GetPost(postID); getErr != nil && getErr.StatusCode == http.StatusNotFound {
 			s.prune(ctx, postID)
 			return
 		}

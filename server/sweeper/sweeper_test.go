@@ -3,6 +3,7 @@ package sweeper
 import (
 	"context"
 	"errors"
+	"net/http"
 	"testing"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -33,16 +34,21 @@ func (f *fakeStore) DeleteByPostID(_ context.Context, postID string) error {
 }
 
 type fakePosts struct {
-	existing  map[string]bool            // postID -> exists
-	deleted   []string                   // DeletePost call order
-	deleteErr map[string]*model.AppError // postID -> error returned by DeletePost
+	existing   map[string]bool            // postID -> exists (GetPost returns the post)
+	getPostErr map[string]*model.AppError // postID -> explicit GetPost error (overrides existing)
+	deleted    []string                   // DeletePost call order
+	deleteErr  map[string]*model.AppError // postID -> error returned by DeletePost
 }
 
 func (f *fakePosts) GetPost(id string) (*model.Post, *model.AppError) {
+	if e, ok := f.getPostErr[id]; ok {
+		return nil, e
+	}
 	if f.existing[id] {
 		return &model.Post{Id: id}, nil
 	}
-	return nil, &model.AppError{}
+	// Not in existing -> treated as gone (MM returns 404 for missing posts).
+	return nil, &model.AppError{StatusCode: http.StatusNotFound}
 }
 
 func (f *fakePosts) DeletePost(id string) *model.AppError {
@@ -78,7 +84,7 @@ func TestRunDeletesExpiredAndPrunes(t *testing.T) {
 }
 
 func TestRunStalePostPrunesWithoutError(t *testing.T) {
-	// p3 already removed by the user -> DeletePost errors, GetPost not found.
+	// p3 already removed by the user -> DeletePost errors, GetPost returns 404.
 	store := &fakeStore{expired: []expiry.Entry{{PostID: "p3"}}}
 	posts := &fakePosts{existing: map[string]bool{}, deleteErr: map[string]*model.AppError{"p3": {}}}
 	sw, log := newSweeper(store, posts)
@@ -86,12 +92,12 @@ func TestRunStalePostPrunesWithoutError(t *testing.T) {
 	sw.Run()
 
 	assert.Contains(t, posts.deleted, "p3")
-	assert.Equal(t, []string{"p3"}, store.pruned, "stale row pruned")
+	assert.Equal(t, []string{"p3"}, store.pruned, "stale (404) row pruned")
 	assert.Empty(t, log.errors, "stale handling is not an error")
 }
 
 func TestRunTransientDeleteKeepsRowForRetry(t *testing.T) {
-	// p4 still exists but DeletePost transiently fails -> row kept, logged.
+	// p4 still exists (GetPost found) but DeletePost transiently fails -> keep row.
 	store := &fakeStore{expired: []expiry.Entry{{PostID: "p4"}}}
 	posts := &fakePosts{existing: map[string]bool{"p4": true}, deleteErr: map[string]*model.AppError{"p4": {}}}
 	sw, log := newSweeper(store, posts)
@@ -100,6 +106,23 @@ func TestRunTransientDeleteKeepsRowForRetry(t *testing.T) {
 
 	assert.Contains(t, posts.deleted, "p4")
 	assert.Empty(t, store.pruned, "row kept so the post is retried next tick")
+	require.Len(t, log.errors, 1)
+}
+
+func TestRunTransientGetPostKeepsRowForRetry(t *testing.T) {
+	// DeletePost fails AND GetPost fails with a non-404 (transient) -> must NOT prune.
+	store := &fakeStore{expired: []expiry.Entry{{PostID: "p5"}}}
+	posts := &fakePosts{
+		existing:   map[string]bool{},
+		getPostErr: map[string]*model.AppError{"p5": {StatusCode: http.StatusInternalServerError}},
+		deleteErr:  map[string]*model.AppError{"p5": {}},
+	}
+	sw, log := newSweeper(store, posts)
+
+	sw.Run()
+
+	assert.Contains(t, posts.deleted, "p5")
+	assert.Empty(t, store.pruned, "transient lookup must not prune the row (post may still exist)")
 	require.Len(t, log.errors, 1)
 }
 
