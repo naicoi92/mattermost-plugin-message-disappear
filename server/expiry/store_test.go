@@ -119,3 +119,22 @@ func TestStoreMigrateFailsOnClosedDB(t *testing.T) {
 	err = NewSQLStore(db).Migrate(context.Background())
 	require.Error(t, err)
 }
+
+func TestStoreDeleteByPostIDsBatch(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	require.NoError(t, store.Upsert(ctx, Entry{PostID: "p1", ChannelID: "c", RootID: "p1", ExpireAt: 1, CreatedAt: 1}))
+	require.NoError(t, store.Upsert(ctx, Entry{PostID: "p2", ChannelID: "c", RootID: "p2", ExpireAt: 1, CreatedAt: 1}))
+	require.NoError(t, store.Upsert(ctx, Entry{PostID: "p3", ChannelID: "c", RootID: "p3", ExpireAt: 1, CreatedAt: 1}))
+
+	require.NoError(t, store.DeleteByPostIDs(ctx, []string{"p1", "p2"}))
+	gone1, _ := store.GetByPostID(ctx, "p1")
+	gone2, _ := store.GetByPostID(ctx, "p2")
+	kept, _ := store.GetByPostID(ctx, "p3")
+	assert.Nil(t, gone1)
+	assert.Nil(t, gone2)
+	assert.NotNil(t, kept, "unrelated row preserved")
+
+	// Empty batch is a no-op (no error).
+	require.NoError(t, store.DeleteByPostIDs(ctx, nil))
+}

@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // Entry is a row in the mpmd_expire index.
@@ -30,8 +31,10 @@ type ExpireIndexStore interface {
 	GetByPostID(ctx context.Context, postID string) (*Entry, error)
 	// GetExpired returns up to limit rows whose expire_at <= nowMs, oldest first.
 	GetExpired(ctx context.Context, nowMs int64, limit int) ([]Entry, error)
-	// DeleteByPostID removes a row (after the post is deleted / found stale).
+	// DeleteByPostID removes one row (used in tests / single cleanup).
 	DeleteByPostID(ctx context.Context, postID string) error
+	// DeleteByPostIDs removes rows for the given posts (after a purge batch).
+	DeleteByPostIDs(ctx context.Context, postIDs []string) error
 }
 
 // NewSQLStore wraps a Mattermost master DB handle as an ExpireIndexStore.
@@ -44,7 +47,6 @@ type sqlStore struct {
 }
 
 // DDL is portable across postgres and sqlite (MM v10+ is postgres-focused).
-// `id` is intentionally omitted — post_id is the primary key (one row per post).
 const ddl = `
 CREATE TABLE IF NOT EXISTS mpmd_expire (
     post_id    VARCHAR(26) NOT NULL PRIMARY KEY,
@@ -131,4 +133,26 @@ func (s *sqlStore) DeleteByPostID(ctx context.Context, postID string) error {
 		return fmt.Errorf("expire: delete %q: %w", postID, err)
 	}
 	return nil
+}
+
+func (s *sqlStore) DeleteByPostIDs(ctx context.Context, postIDs []string) error {
+	if len(postIDs) == 0 {
+		return nil
+	}
+	ph, args := inClause(postIDs)
+	if _, err := s.db.ExecContext(ctx, "DELETE FROM mpmd_expire WHERE post_id IN "+ph, args...); err != nil {
+		return fmt.Errorf("expire: delete batch: %w", err)
+	}
+	return nil
+}
+
+// inClause builds "(?, ?, ...)" and matching args for an IN list.
+func inClause(ids []string) (string, []any) {
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	return "(" + strings.Join(placeholders, ", ") + ")", args
 }
