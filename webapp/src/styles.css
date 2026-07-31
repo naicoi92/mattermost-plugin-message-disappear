@@ -6,6 +6,17 @@
     opacity: 0.75;
 }
 
+.disappear-header-icon {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 0.9em;
+}
+
+.disappear-header-icon--off {
+    opacity: 0.45;
+}
+
 .disappear-modal-backdrop {
     position: fixed;
     inset: 0;
