@@ -1,7 +1,7 @@
 {
   "private": true,
   "name": "mattermost-disappearing-messages-webapp",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Webapp bundle for the Disappearing Messages Mattermost plugin.",
   "scripts": {
     "build": "webpack --mode=production",
