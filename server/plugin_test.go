@@ -37,6 +37,7 @@ func activatedPlugin(t *testing.T) *Plugin {
 	stubLogInfo(mp)
 	mp.On("RegisterCommand", mock.Anything).Maybe().Return(nil)
 	mp.On("KVGet", mock.Anything).Maybe().Return([]byte(nil), (*model.AppError)(nil))
+	mp.On("LoadPluginConfiguration", mock.Anything).Maybe().Return(nil)
 	p.API = mp
 	require.NoError(t, p.OnActivate())
 	return p

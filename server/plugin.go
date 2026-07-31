@@ -28,6 +28,7 @@ type Plugin struct {
 	plugin.MattermostPlugin
 
 	client        *pluginapi.Client
+	cfg           configHolder
 	ttlService    *ttl.Service
 	apiHandler    *api.Handler
 	expireStore   expiry.ExpireIndexStore
@@ -41,6 +42,7 @@ type Plugin struct {
 // command, and — when DB access is available — the expire index + Purger + HA sweeper.
 func (p *Plugin) OnActivate() error {
 	p.API.LogInfo("Disappearing Messages plugin activated")
+	p.loadConfig()
 
 	p.client = pluginapi.NewClient(p.API, p.Driver)
 	p.ttlService = ttl.NewService(ttl.NewKVStore(p.API), p.API)
@@ -81,7 +83,10 @@ func (p *Plugin) initExpiry(ctx context.Context) error {
 
 // initSweeper schedules the single-node HA sweeper (cluster.Schedule).
 func (p *Plugin) initSweeper() error {
-	p.sweeper = sweeper.New(p.expireStore, p.purger, p.API, 500)
+	// Route purges through the config switch (hard purge gated by the schema-version
+	// allowlist; soft-delete fallback when EnablePurge is off).
+	swPurger := &configPurger{cfg: &p.cfg, hard: p.purger, soft: p.API, api: p.API}
+	p.sweeper = sweeper.New(p.expireStore, swPurger, p.API, 500)
 	job, err := cluster.Schedule(p.API, "disappear_sweeper", cluster.MakeWaitForRoundedInterval(sweeperInterval), p.sweeper.Run)
 	if err != nil {
 		return err
@@ -98,6 +103,22 @@ func (p *Plugin) OnDeactivate() error {
 		}
 	}
 	p.API.LogInfo("Disappearing Messages plugin deactivated")
+	return nil
+}
+
+// loadConfig reads the System-Console configuration into the live config holder.
+func (p *Plugin) loadConfig() {
+	var c configuration
+	if err := p.API.LoadPluginConfiguration(&c); err != nil {
+		p.API.LogError("disappear: failed to load config, using defaults", "err", err)
+		return
+	}
+	p.cfg.set(c)
+}
+
+// OnConfigurationChange reloads configuration when the System Console changes it.
+func (p *Plugin) OnConfigurationChange() error {
+	p.loadConfig()
 	return nil
 }
 
