@@ -22,9 +22,12 @@ func TestOnActivate(t *testing.T) {
 	p := &Plugin{}
 	api := &plugintest.API{}
 	stubLogInfo(api)
+	api.On("RegisterCommand", mock.Anything).Maybe().Return(nil)
 	p.API = api
 
 	require.NoError(t, p.OnActivate())
+	require.NotNil(t, p.ttlService, "OnActivate must wire the TTL service")
+	require.NotNil(t, p.apiHandler, "OnActivate must wire the API handler")
 }
 
 func TestOnDeactivate(t *testing.T) {

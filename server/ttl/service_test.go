@@ -241,3 +241,22 @@ func TestGetTTLAndClearRoundtrip(t *testing.T) {
 	assert.False(t, ok)
 	assert.Zero(t, d)
 }
+
+func TestGetSetting(t *testing.T) {
+	perm := &fakePerm{sysadmin: true, channel: &model.Channel{Type: model.ChannelTypeOpen}}
+	svc := NewService(NewKVStore(newFakeKV()), perm)
+
+	// unset -> nil (default OFF)
+	got, err := svc.GetSetting(context.Background(), "ch1")
+	require.NoError(t, err)
+	assert.Nil(t, got)
+
+	// set -> full record
+	err = svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1))
+	require.NoError(t, err)
+	got, err = svc.GetSetting(context.Background(), "ch1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, int64(3600), got.DurationSeconds)
+	assert.Equal(t, "u1", got.SetBy)
+}

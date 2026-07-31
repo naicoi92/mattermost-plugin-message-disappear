@@ -69,6 +69,13 @@ func (s *Service) GetTTL(ctx context.Context, channelID string) (time.Duration, 
 	return time.Duration(setting.DurationSeconds) * time.Second, true, nil
 }
 
+// GetSetting returns the full TTL record for the channel, or nil when no TTL is
+// set (default OFF, D4). Used by the API layer which needs set_by/set_at.
+func (s *Service) GetSetting(ctx context.Context, channelID string) (*TTLSetting, error) {
+	_ = ctx
+	return s.store.Get(channelID)
+}
+
 // ClearTTL removes the channel's TTL after a permission check (D2).
 func (s *Service) ClearTTL(ctx context.Context, actorID, channelID string) error {
 	_ = ctx
