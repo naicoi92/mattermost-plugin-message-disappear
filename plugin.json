@@ -1,0 +1,27 @@
+{
+    "id": "com.github.naicoi92.disappearing-messages",
+    "name": "Disappearing Messages",
+    "description": "Brings Enterprise-grade hard-delete message retention to the Team edition: set a per-channel TTL and expired messages are purged from the database.",
+    "homepage_url": "https://github.com/naicoi92/mattermost-plugin-message-disappear",
+    "support_url": "https://github.com/naicoi92/mattermost-plugin-message-disappear/issues",
+    "release_notes_url": "https://github.com/naicoi92/mattermost-plugin-message-disappear/releases",
+    "version": "0.1.0",
+    "min_server_version": "10.0.0",
+    "server": {
+        "executables": {
+            "linux-amd64": "server/dist/plugin-linux-amd64",
+            "linux-arm64": "server/dist/plugin-linux-arm64",
+            "darwin-amd64": "server/dist/plugin-darwin-amd64",
+            "darwin-arm64": "server/dist/plugin-darwin-arm64",
+            "windows-amd64": "server/dist/plugin-windows-amd64.exe"
+        }
+    },
+    "webapp": {
+        "bundle_path": "webapp/dist/main.js"
+    },
+    "settings_schema": {
+        "header": "",
+        "footer": "",
+        "settings": []
+    }
+}
