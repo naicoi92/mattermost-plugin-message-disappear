@@ -29,6 +29,11 @@ type Purger interface {
 // verified against the target MM version's schema at deployment (see design
 // doc 05 §3 "Verify tại impl"). Centralised here so a schema change is a
 // one-line fix.
+//
+// Scope: this deletes the DB ROWS only. The Mattermost plugin API exposes no
+// file-delete capability, so the underlying attachment BLOBS (disk/object storage)
+// are NOT removed — the fileinfo metadata row is, but the blob becomes orphaned.
+// See the README "Known limitations".
 var footprint = []struct {
 	table string
 	col   string
