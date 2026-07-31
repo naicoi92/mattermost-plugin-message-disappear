@@ -13,10 +13,25 @@ Brings Enterprise-grade **hard-delete message retention** to the Mattermost
 
 ## Status
 
-**M0 — Foundation (skeleton).** The plugin compiles, installs, activates and
-registers a no-op post hook. The disappearing-messages lifecycle (TTL → expiry
-index → sweeper → transactional purge) is implemented in subsequent milestones
-(M1 Core, M2 Purge, M3 Hardening).
+Core lifecycle implemented: per-channel TTL (KV + presets + permission), HTTP API +
+`/disappear` slash command, webapp badge + selector modal, expire index (SQL),
+HA sweeper (`cluster.Schedule`), and a **transactional hard purge** gated by a
+schema-version guard (`PurgeSchemaAllowlist`) with an `EnablePurge` soft-delete
+fallback. Remaining: EE legal-hold coexist (V5) and release hardening (V6).
+
+## Known limitations
+
+- **Physical attachment blobs are NOT deleted.** The Mattermost plugin API exposes no
+  file-delete capability (only upload/read/copy), so the purge deletes the `fileinfo`
+  metadata rows (within the transaction) but cannot remove the underlying file blobs
+  from disk/object storage. Orphaned blobs must be cleaned via Mattermost storage
+  maintenance or native Data Retention (Enterprise). This is a platform constraint,
+  not a bug.
+- **Disappearing ≠ end-to-end encrypted.** The server reads messages in plaintext until
+  deletion (D8). This is ephemeral UX + data minimization, not a security guarantee.
+- **Schema-dependent purge.** Hard purge binds to tested MM versions via
+  `PurgeSchemaAllowlist`; it is skipped (fail-safe) on unverified schemas. Verify the
+  footprint column names against your MM version before production use.
 
 ## Requirements
 
