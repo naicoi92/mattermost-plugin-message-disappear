@@ -64,6 +64,12 @@ server:  ## Cross-compile the server for all bundled architectures
 	@echo "  --> server/dist/plugin-windows-amd64.exe"
 	@cd server && GOOS=windows GOARCH=amd64 $(GO) build -trimpath -o dist/plugin-windows-amd64.exe .
 
+.PHONY: server-linux-amd64
+server-linux-amd64:  ## Cross-compile only the linux/amd64 server binary (for linux/amd64 Mattermost, e.g. on k8s)
+	@rm -rf server/dist && mkdir -p server/dist
+	@cd server && GOOS=linux GOARCH=amd64 $(GO) build -trimpath -o dist/plugin-linux-amd64 .
+	@echo "  --> server/dist/plugin-linux-amd64"
+
 webapp/node_modules: webapp/package.json
 	cd webapp && $(NPM) install
 	@touch $@
@@ -88,8 +94,11 @@ endif
 .PHONY: dist
 dist: server webapp bundle  ## Cross-compile server, build webapp and assemble the tarball
 
-.PHONY: deploy
-deploy: dist  ## Build and deploy the plugin to a running Mattermost server
+.PHONY: dist-linux-amd64
+dist-linux-amd64: server-linux-amd64 webapp bundle  ## Build only linux/amd64, build the webapp and assemble the tarball
+
+.PHONY: upload
+upload:  ## Upload the assembled bundle ($(BUNDLE)) to a running Mattermost server
 	@if command -v pluginctl >/dev/null 2>&1; then \
 	  pluginctl deploy $(PLUGIN_ID) $(BUNDLE); \
 	elif [ -n "$$MM_SERVICESETTINGS_SITEURL" ] && [ -n "$$MM_ADMIN_TOKEN" ]; then \
@@ -103,6 +112,12 @@ deploy: dist  ## Build and deploy the plugin to a running Mattermost server
 	  echo "  System Console > Plugins > Plugin Management > Upload"; \
 	fi
 
+.PHONY: deploy
+deploy: dist upload  ## Build (all platforms) and deploy the plugin to a running Mattermost server
+
+.PHONY: deploy-linux-amd64
+deploy-linux-amd64: dist-linux-amd64 upload  ## Build linux/amd64 only and deploy (suited for Mattermost on k8s)
+
 .PHONY: clean
 clean:  ## Remove all build artifacts
 	rm -rf server/dist server/coverage.out webapp/dist webapp/node_modules dist
@@ -110,4 +125,4 @@ clean:  ## Remove all build artifacts
 .PHONY: help
 help:  ## Show this help
 	@awk 'BEGIN {FS = ":.*##"; printf "Usage:\n  make <target>\n\nTargets:\n"} \
-	  /^[a-zA-Z_-]+:.*?##/ { printf "  %-16s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+	  /^[a-zA-Z0-9_-]+:.*?##/ { printf "  %-20s %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
