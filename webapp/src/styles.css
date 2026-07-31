@@ -1,0 +1,85 @@
+/* Disappearing Messages webapp styles. */
+
+.disappear-badge {
+    margin-left: 4px;
+    font-size: 0.85em;
+    opacity: 0.75;
+}
+
+.disappear-modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.disappear-modal {
+    background: var(--center-channel-bg, #fff);
+    color: var(--center-channel-color, #1a1a1a);
+    border-radius: 8px;
+    padding: 24px;
+    min-width: 360px;
+    max-width: 480px;
+}
+
+.disappear-modal h2 {
+    margin-top: 0;
+}
+
+.disappear-warning {
+    color: var(--error-text, #c00);
+    font-size: 0.9em;
+}
+
+.disappear-current {
+    opacity: 0.8;
+}
+
+.disappear-presets {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 12px 0;
+}
+
+.disappear-preset {
+    padding: 6px 12px;
+    border: 1px solid currentColor;
+    border-radius: 4px;
+    cursor: pointer;
+    background: transparent;
+}
+
+.disappear-preset[aria-pressed='true'] {
+    background: rgba(0, 0, 0, 0.1);
+}
+
+.disappear-custom {
+    display: block;
+    margin: 12px 0;
+}
+
+.disappear-custom input {
+    margin-left: 8px;
+    width: 100px;
+}
+
+.disappear-error {
+    color: var(--error-text, #c00);
+}
+
+.disappear-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 16px;
+}
+
+.disappear-actions button {
+    padding: 6px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+}

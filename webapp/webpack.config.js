@@ -2,8 +2,10 @@ const path = require('path');
 
 const PLUGIN_ID = require('../plugin.json').id;
 
-// Externals are provided by the Mattermost webapp at runtime; bundling them
-// would duplicate React/Redux. UI components that import these land in V2.3.
+const NPM_TARGET = process.env.npm_lifecycle_event; // eslint-disable-line no-process-env
+const isDev = NPM_TARGET === 'debug';
+
+// Externals are provided by the Mattermost webapp at runtime.
 const config = {
     entry: ['./src/index.tsx'],
     resolve: {
@@ -13,15 +15,14 @@ const config = {
     module: {
         rules: [
             {
-                test: /\.(ts|tsx)$/,
+                test: /\.(js|jsx|ts|tsx)$/,
                 exclude: /node_modules/,
                 use: {
-                    loader: 'ts-loader',
-                    options: {
-                        transpileOnly: true,
-                    },
+                    loader: 'babel-loader',
+                    options: {cacheDirectory: true},
                 },
             },
+            {test: /\.css$/, use: ['style-loader', 'css-loader']},
         ],
     },
     externals: {
@@ -38,7 +39,7 @@ const config = {
         publicPath: '/',
         filename: 'main.js',
     },
-    mode: 'production',
+    mode: isDev ? 'development' : 'production',
 };
 
 module.exports = config;
