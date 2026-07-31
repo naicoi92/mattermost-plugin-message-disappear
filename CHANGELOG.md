@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.0
+
+Minor release: new channel-header UX (TTL status + quick-select) and the canonical plugin-id rename, plus build/deploy tooling.
+
+### Added
+
+- **Channel-header TTL status + quick-select dropdown** ([MPMD-31], #13): the header button now shows live status (⏱ + duration when a TTL is set, muted ⏱ when off) with a hover tooltip (duration + set_by + set_at); the channel-header menu offers quick presets (`5m`/`1h`/`8h`/`1d`/`1w`) + Off + Custom. Shares a `useChannelTTL` hook with the post badge. Webapp-only, no server change.
+- `make deploy-linux-amd64` (+ `server-linux-amd64`, `dist-linux-amd64`): cross-compile only the linux/amd64 server binary and bundle it — suited for Mattermost on k8s (linux/amd64) (#14).
+
+### Changed
+
+- **Plugin id renamed** to `com.mattermost.plugin-message-disappear` (mattermost-plugin convention `com.mattermost.plugin-*`): plugin.json, server `PluginID`, webapp manifest, README (#12). ⚠️ Upgrading from an install using the previous id registers as a new plugin — remove the old one first.
+- Shared upload logic (`pluginctl` / `curl` + `MM_ADMIN_TOKEN` / manual) extracted into a reusable `upload` target; both `deploy` and `deploy-linux-amd64` call it (#14).
+
+### Fixed
+
+- `make help` hid any target whose name contains digits (`amd64`/`arm64`): target regex `[a-zA-Z_-]+` → `[a-zA-Z0-9_-]+`; help column widened `16` → `20` (#14).
+
 ## 1.0.0
 
 First release: disappearing messages for Mattermost (Team + Enterprise editions).
