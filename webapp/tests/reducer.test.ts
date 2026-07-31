@@ -27,3 +27,9 @@ it('setChannelTTL does not mutate other channels', () => {
     expect(s.byChannel.ch1).toEqual(ttl);
     expect(s.byChannel.ch2?.duration).toBe(3600);
 });
+
+it('unknown action returns the same state reference (redux contract)', () => {
+    const before = reducer(undefined, openModal('ch9'));
+    const after = reducer(before, {type: 'UNKNOWN'} as unknown as Parameters<typeof reducer>[1]);
+    expect(after).toBe(before);
+});
