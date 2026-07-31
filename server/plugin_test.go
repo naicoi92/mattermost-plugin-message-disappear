@@ -40,7 +40,7 @@ func TestMessageHasBeenPostedIsNoOp(t *testing.T) {
 	p := &Plugin{}
 	post := &model.Post{Id: "post-1", CreateAt: 1, Message: "hello"}
 
-	got, appErr := p.MessageHasBeenPosted(nil, post)
-	require.Nil(t, appErr, "no-op hook must not return an AppError")
-	require.Nil(t, got, "no-op hook must not replace the post")
+	require.NotPanics(t, func() {
+		p.MessageHasBeenPosted(nil, post)
+	})
 }

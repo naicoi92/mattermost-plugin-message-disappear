@@ -31,6 +31,5 @@ func (p *Plugin) OnDeactivate() error {
 // MessageHasBeenPosted is a no-op placeholder proving the plugin receives post
 // events. The real expiry-indexing logic lands in V3.1 (ExpiryService, MPMD-20)
 // and replaces this implementation.
-func (p *Plugin) MessageHasBeenPosted(_ *plugin.Context, _ *model.Post) (*model.Post, *model.AppError) {
-	return nil, nil
+func (p *Plugin) MessageHasBeenPosted(_ *plugin.Context, _ *model.Post) {
 }
