@@ -72,8 +72,12 @@ func (s *Service) OnPostCreated(ctx context.Context, post *model.Post) error {
 		return err
 	}
 
-	// A reply extends the whole thread (D5): bump root + earlier replies to the
-	// new expiry. A standalone post (RootId == "") needs no bump.
+	// A reply extends the whole thread (D5): bump root + earlier replies to the new
+	// expiry. A standalone post (RootId == "") needs no bump. Ordering is safe: a
+	// reply's RootId references an already-committed root, so the root is always
+	// indexed before its replies — a forward bump can never regress an earlier reply.
+	// (If MM ever delivered hooks out of order, a forward-only GREATEST(expire_at, ?)
+	// bump would be needed; not required today.)
 	if post.RootId != "" {
 		if err := s.store.UpdateExpireByRoot(ctx, root, expireAt); err != nil {
 			return err
