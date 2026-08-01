@@ -90,6 +90,8 @@ func (f *fakePerm) GetChannelMember(_ string, _ string) (*model.ChannelMember, *
 	return f.member, f.memberErr
 }
 
+func (fakePerm) LogError(_ string, _ ...any) {}
+
 // --- validation & presets ---
 
 func TestValidateTTLBounds(t *testing.T) {

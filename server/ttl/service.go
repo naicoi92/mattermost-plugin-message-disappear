@@ -15,6 +15,7 @@ type PermissionChecker interface {
 	HasPermissionToChannel(userID, channelID string, permission *model.Permission) bool
 	GetChannel(channelID string) (*model.Channel, *model.AppError)
 	GetChannelMember(channelID, userID string) (*model.ChannelMember, *model.AppError)
+	LogError(msg string, keyvals ...any)
 }
 
 // Domain errors returned by the service. The API layer (V2.2) maps these to
@@ -92,21 +93,31 @@ func (s *Service) ClearTTL(ctx context.Context, actorID, channelID string) error
 // Membership is verified with GetChannelMember — a distinct plugin-API call
 // from GetChannel (observed to return (nil, nil) for valid channels on
 // Mattermost 10.x) and from the permission system (HasPermissionTo /
-// HasPermissionToChannel under-report for system admins on the same version).
-// A system admin or channel-properties holder is still allowed outright as a
-// fast path, but membership is authoritative: a system admin viewing a channel
-// is a member, so a misbehaving fast path does not block them.
+// HasPermissionToChannel, which under-report for system admins on the same
+// version). System and channel admins remain fast paths; membership is
+// authoritative.
+//
+// When every path fails the raw result of each plugin-API call is logged, so a
+// misbehaving server is identifiable from the plugin logs.
 func (s *Service) checkCanManage(actorID, channelID string) error {
 	if s.perm.HasPermissionTo(actorID, model.PermissionManageSystem) {
 		return nil
 	}
-	if s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePublicChannelProperties) ||
-		s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePrivateChannelProperties) {
+	managePub := s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePublicChannelProperties)
+	managePriv := s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePrivateChannelProperties)
+	if managePub || managePriv {
 		return nil
 	}
-	// Any channel member may set a TTL.
-	if member, appErr := s.perm.GetChannelMember(channelID, actorID); appErr == nil && member != nil {
+	member, memErr := s.perm.GetChannelMember(channelID, actorID)
+	if memErr == nil && member != nil {
 		return nil
 	}
+	// Diagnostic: every authorisation path failed — log what each call returned.
+	ch, chErr := s.perm.GetChannel(channelID)
+	s.perm.LogError("disappear: TTL authorisation denied",
+		"actor", actorID, "channel_id", channelID,
+		"manage_pub", managePub, "manage_priv", managePriv,
+		"member_nil", member == nil, "member_err", memErr,
+		"channel_nil", ch == nil, "channel_err", chErr)
 	return ErrForbidden
 }

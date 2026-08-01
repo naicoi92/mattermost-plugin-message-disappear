@@ -145,6 +145,8 @@ func (stubPerm) GetChannelMember(string, string) (*model.ChannelMember, *model.A
 	return nil, nil
 }
 
+func (stubPerm) LogError(_ string, _ ...any) {}
+
 func TestPostTTLEndToEndValidationAndPermission(t *testing.T) {
 	kv := &stubKV{data: map[string][]byte{}}
 	svc := ttl.NewService(ttl.NewKVStore(kv), stubPerm{channel: &model.Channel{Type: model.ChannelTypeOpen}})
