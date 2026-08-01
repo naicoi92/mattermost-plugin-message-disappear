@@ -8,7 +8,6 @@ import (
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 	"github.com/mattermost/mattermost/server/public/pluginapi"
-	"github.com/mattermost/mattermost/server/public/pluginapi/cluster"
 
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/api"
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/expiry"
@@ -23,7 +22,7 @@ const sweeperInterval = 60 * time.Second
 //
 // Disappearing-messages lifecycle: TTL set (V2) -> expire index (V3.1) ->
 // sweeper + transactional hard purge (V3.2/V4). This wiring activates the TTL
-// service, the HTTP/slash API, the expire index, the HA sweeper and the Purger.
+// service, the HTTP/slash API, the expire index, the background sweeper and the Purger.
 type Plugin struct {
 	plugin.MattermostPlugin
 
@@ -35,11 +34,11 @@ type Plugin struct {
 	expiryService *expiry.Service
 	purger        purge.Purger
 	sweeper       *sweeper.Sweeper
-	sweeperJob    *cluster.Job
+	sweeperCancel context.CancelFunc
 }
 
 // OnActivate wires the TTL service, the HTTP/slash API surface, the /disappear
-// command, and — when DB access is available — the expire index + Purger + HA sweeper.
+// command, and — when DB access is available — the expire index + Purger + background sweeper.
 func (p *Plugin) OnActivate() error {
 	p.API.LogInfo("Disappearing Messages plugin activated")
 	p.loadConfig()
@@ -58,8 +57,8 @@ func (p *Plugin) OnActivate() error {
 	if p.Driver != nil {
 		if err := p.initExpiry(context.Background()); err != nil {
 			p.API.LogError("disappear: expire index disabled", "err", err)
-		} else if err := p.initSweeper(); err != nil {
-			p.API.LogError("disappear: sweeper disabled", "err", err)
+		} else {
+			p.initSweeper()
 		}
 	}
 	return nil
@@ -81,26 +80,50 @@ func (p *Plugin) initExpiry(ctx context.Context) error {
 	return nil
 }
 
-// initSweeper schedules the single-node HA sweeper (cluster.Schedule).
-func (p *Plugin) initSweeper() error {
+// initSweeper starts the background sweeper on a fixed interval.
+//
+// The sweeper runs on its own goroutine driven by a context that OnDeactivate
+// cancels, so shutdown is prompt and never blocks on a dead RPC. Purge is
+// idempotent (deleting already-removed rows is a no-op), so on a multi-node
+// cluster every node may sweep concurrently without corruption — the worst case
+// is redundant delete attempts.
+//
+// This intentionally replaces cluster.Schedule: its KV-mutex pinger (Lock over
+// context.Background) spins forever once the plugin's RPC connection is shut
+// down, hanging OnDeactivate and flooding the log with "connection is shut down".
+func (p *Plugin) initSweeper() {
 	// Route purges through the config switch (hard purge gated by the schema-version
-	// allowlist; soft-delete fallback when EnablePurge is off).
+	// allowlist; soft-delete fallback when EnablePurge is off or the schema is untested).
 	swPurger := &configPurger{cfg: &p.cfg, hard: p.purger, soft: p.API, api: p.API}
 	p.sweeper = sweeper.New(p.expireStore, swPurger, p.API, 500)
-	job, err := cluster.Schedule(p.API, "disappear_sweeper", cluster.MakeWaitForRoundedInterval(sweeperInterval), p.sweeper.Run)
-	if err != nil {
-		return err
-	}
-	p.sweeperJob = job
-	return nil
+
+	ctx, cancel := context.WithCancel(context.Background())
+	p.sweeperCancel = cancel
+	go p.runSweeper(ctx)
 }
 
-// OnDeactivate stops the sweeper and logs deactivation.
-func (p *Plugin) OnDeactivate() error {
-	if p.sweeperJob != nil {
-		if err := p.sweeperJob.Close(); err != nil {
-			p.API.LogError("disappear: sweeper close failed", "err", err)
+// runSweeper drains the backlog once on activation, then sweeps on every
+// interval until ctx is cancelled by OnDeactivate.
+func (p *Plugin) runSweeper(ctx context.Context) {
+	p.sweeper.Run() // sweep the backlog promptly on activation
+
+	ticker := time.NewTicker(sweeperInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			p.sweeper.Run()
 		}
+	}
+}
+
+// OnDeactivate cancels the sweeper (its goroutine exits within one tick) and
+// logs deactivation. Unlike the former cluster.Job, this never blocks on RPC.
+func (p *Plugin) OnDeactivate() error {
+	if p.sweeperCancel != nil {
+		p.sweeperCancel()
 	}
 	p.API.LogInfo("Disappearing Messages plugin deactivated")
 	return nil

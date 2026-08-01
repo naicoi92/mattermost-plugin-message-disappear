@@ -1,5 +1,5 @@
 // Package sweeper periodically purges posts whose expire_at has passed and prunes
-// their index rows. HA is provided by cluster.Schedule (single-node).
+// their index rows. The plugin drives it on a fixed ticker (see plugin.initSweeper).
 package sweeper
 
 import (
@@ -30,7 +30,7 @@ type Logger interface {
 const defaultBatchSize = 500
 
 // Sweeper purges expired posts (D10) and prunes their index rows on each tick.
-// HA: cluster.Schedule runs Run on a single cluster node, so purges are not duplicated.
+// Run is driven by the plugin's ticker; purge is idempotent, so nodes sweeping concurrently are safe.
 type Sweeper struct {
 	store     ExpireStore
 	purger    Purger
