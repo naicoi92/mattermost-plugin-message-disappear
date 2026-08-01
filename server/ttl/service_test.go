@@ -217,6 +217,25 @@ func TestSetTTLChannelNotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrChannelNotFound)
 }
 
+// Regression (Mattermost 10.x): plugin.API.GetChannel returns (nil, nil) for a
+// valid team channel. A channel admin must still be authorised via the
+// channel-scoped permission, without relying on GetChannel.
+func TestSetTTLAllowsAdminWhenGetChannelReturnsNil(t *testing.T) {
+	perm := &fakePerm{managePub: true, channel: nil, channelErr: nil}
+	svc := NewService(NewKVStore(newFakeKV()), perm)
+	require.NoError(t, svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1)))
+}
+
+// Mattermost 10.x GetChannel (nil, nil): a non-admin member is denied as
+// forbidden, not "channel not found" (the channel may well exist; only
+// GetChannel is broken).
+func TestSetTTLDeniesMemberWhenGetChannelReturnsNil(t *testing.T) {
+	perm := &fakePerm{channel: nil, channelErr: nil}
+	svc := NewService(NewKVStore(newFakeKV()), perm)
+	err := svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1))
+	assert.ErrorIs(t, err, ErrForbidden)
+}
+
 func TestGetTTLAndClearRoundtrip(t *testing.T) {
 	perm := &fakePerm{sysadmin: true, channel: &model.Channel{Type: model.ChannelTypeOpen}}
 	svc := NewService(NewKVStore(newFakeKV()), perm)

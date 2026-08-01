@@ -89,28 +89,35 @@ func (s *Service) ClearTTL(ctx context.Context, actorID, channelID string) error
 // checkCanManage enforces D2: system admin or channel admin for public/private
 // channels; any participant for DM/Group DMs (equal trust).
 //
+// The team-channel-admin path uses HasPermissionToChannel — the authoritative
+// channel-scoped permission — and does NOT need the channel object. This matters
+// because plugin.API.GetChannel has been observed to return (nil, nil) for an
+// otherwise-valid channel on Mattermost 10.x, which previously made every TTL
+// set on a team channel fail with "channel not found". GetChannel is now
+// consulted only to detect DM/Group DMs (whose participants hold no
+// channel-properties permission yet may set a TTL under D2). When GetChannel is
+// unavailable, DM/GM support degrades (the request is denied); team-channel
+// admins are unaffected.
+//
 // The design (D2) names the permission "ManageChannel"; the Mattermost model
 // splits it into ManagePublic/PrivateChannelProperties, which is what this uses.
 func (s *Service) checkCanManage(actorID, channelID string) error {
 	if s.perm.HasPermissionTo(actorID, model.PermissionManageSystem) {
 		return nil
 	}
+	// Team-channel admin: the channel-scoped "manage properties" permission is
+	// authoritative and needs no channel object (robust to GetChannel returning nil).
+	if s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePublicChannelProperties) ||
+		s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePrivateChannelProperties) {
+		return nil
+	}
+	// DM/Group DM: any participant may set (equal trust, D2). Detecting a DM
+	// needs the channel type, so GetChannel is consulted here only.
 	ch, appErr := s.perm.GetChannel(channelID)
-	if appErr != nil {
+	switch {
+	case appErr != nil:
 		return fmt.Errorf("%w: %s: %s", ErrChannelNotFound, channelID, appErr.Error())
-	}
-	if ch == nil {
-		return fmt.Errorf("%w: %s: nil channel, no app error", ErrChannelNotFound, channelID)
-	}
-	if ch.IsGroupOrDirect() {
-		// DM/Group DM: any participant may set (equal trust, D2). Membership is
-		// guaranteed by the API layer — the actor can only reach channels they are in.
-		return nil
-	}
-	if ch.IsOpen() && s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePublicChannelProperties) {
-		return nil
-	}
-	if !ch.IsOpen() && s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePrivateChannelProperties) {
+	case ch != nil && ch.IsGroupOrDirect():
 		return nil
 	}
 	return ErrForbidden
