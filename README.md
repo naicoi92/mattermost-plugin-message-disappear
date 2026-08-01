@@ -15,9 +15,9 @@ Brings Enterprise-grade **hard-delete message retention** to the Mattermost
 
 **v1.0.0** — full lifecycle: per-channel TTL (KV + presets + permission), HTTP API +
 `/disappear` slash command, webapp badge + selector modal, expire index (SQL),
-HA sweeper (`cluster.Schedule`), a **transactional hard purge** gated by a
-schema-version guard (`PurgeSchemaAllowlist`) with an `EnablePurge` soft-delete
-fallback, and EE legal-hold coexist (hard purge on Team; soft-delete on
+background sweeper, a **transactional hard purge** gated by a schema-version
+guard (`PurgeSchemaAllowlist`) with a soft-delete fallback (off, Enterprise, or
+unverified schema), and EE legal-hold coexist (hard purge on Team; soft-delete on
 Enterprise). See `CHANGELOG.md`.
 
 ## Known limitations
@@ -30,9 +30,10 @@ Enterprise). See `CHANGELOG.md`.
   not a bug.
 - **Disappearing ≠ end-to-end encrypted.** The server reads messages in plaintext until
   deletion (D8). This is ephemeral UX + data minimization, not a security guarantee.
-- **Schema-dependent purge.** Hard purge binds to tested MM versions via
-  `PurgeSchemaAllowlist`; it is skipped (fail-safe) on unverified schemas. Verify the
-  footprint column names against your MM version before production use.
+- **Schema-dependent hard purge.** Hard purge binds to tested MM versions via
+  `PurgeSchemaAllowlist`; on unverified schemas the sweeper **soft-deletes** (messages
+  are still removed). Verify the footprint column names against your MM version before
+  production use. Set the allowlist to your version prefix (e.g. `10.`) for hard deletion.
 - **Enterprise legal-hold respected via soft-delete.** On a licensed Enterprise server
   the plugin's direct DB DELETE would bypass legal-hold (enforced at the API layer,
   not the DB) — and the plugin API exposes no way to query legal-hold. So on Enterprise

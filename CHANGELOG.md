@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **Disappearing messages were never purged when `EnablePurge` was on with an empty/unmatched `PurgeSchemaAllowlist`.** The schema guard returned a fail-safe *skip*, making "enable purge" a silent no-op (messages never cleaned) — worse than the default. The guard now falls back to **soft-delete** (MM `DeletePost`), which is schema-agnostic and always safe. Hard purge still runs when the version is allowlisted; to get hard (no-trace) deletion set `PurgeSchemaAllowlist` to your server version prefix (e.g. `10.`).
+- **`RPC call to KVSetWithOptions API failed: connection is shut down` spam + `OnDeactivate` hang.** The sweeper ran via `cluster.Schedule`, whose KV-mutex pinger (`Lock` over an uncancellable context) spun forever once the plugin's RPC connection shut down — flooding the log and blocking deactivation until Mattermost force-killed the plugin. Replaced with a `time.Ticker` goroutine driven by a context cancelled in `OnDeactivate`: clean, prompt shutdown, no KV spam. Trade-off: drops cluster-wide single-execution (purge is idempotent, so concurrent nodes sweeping is safe — worst case redundant deletes).
+- **Setting a TTL failed with "ttl: channel not found … nil channel, no app error" on Mattermost 10.x.** `plugin.API.GetChannel` returns `(nil, nil)` for an otherwise-valid team channel on 10.x, which the D2 permission check relied on — so every TTL set (slash command and channel-header button alike) was rejected. `checkCanManage` now authorises team-channel admins via the channel-scoped permission (`HasPermissionToChannel`, no channel object needed) and consults `GetChannel` only to detect DM/Group DMs. Team channels are fixed; DM/GM support degrades when `GetChannel` is unavailable.
+
+### Changed
+
+- **`make deploy` / `make deploy-linux-amd64` now stamp the short commit hash onto the build.** Every deployed plugin carries `version+<shorthash>` (semver build metadata, e.g. `1.1.0+018952b`) in its manifest — visible in the Mattermost plugin page — and the bundle is named `…-1.1.0+018952b.tar.gz`, with a deploy log line `Deploying … (commit …)`. The source `plugin.json` and generated manifests stay clean; only the deployed artifact is tagged. Wires up the `BuildHashShort` infra that was gathered but unused.
+
 ## 1.1.0
 
 Minor release: new channel-header UX (TTL status + quick-select) and the canonical plugin-id rename, plus build/deploy tooling.
@@ -28,9 +40,9 @@ First release: disappearing messages for Mattermost (Team + Enterprise editions)
 - **HTTP API** (`POST`/`GET`/`DELETE` `/ttl`) + **`/disappear set|off|status`** slash command.
 - **Webapp**: channel-header button + TTL selector modal (D8 E2EE warning) + post badge (⏱); `ttl_changed` WebSocket event.
 - **Expire index** (`mpmd_expire` SQL) + thread-level expiry — a reply extends the whole thread (D5); editing does not reset it (D7).
-- **HA sweeper** (`cluster.Schedule`, single cluster node — no double-purge).
+- **Background sweeper** (ticker goroutine; purge is idempotent, so concurrent cluster nodes are safe).
 - **Transactional hard purge (D10)**: `posts`/`fileinfo`/`reactions`/`mentions` removed in one all-or-nothing `DELETE`.
-- **Schema-version guard** (`PurgeSchemaAllowlist`): fail-safe skip on unverified MM schemas.
+- **Schema-version guard** (`PurgeSchemaAllowlist`): soft-delete fallback on unverified MM schemas (hard purge only on allowlisted versions).
 - **`EnablePurge` toggle** (soft-delete fallback) + **EE legal-hold coexist**: hard purge on Team; soft-delete on Enterprise (so MM's `DeletePost` honours legal-hold, D11).
 
 ### Known limitations
