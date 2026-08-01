@@ -56,11 +56,14 @@ func (conflictKV) KVSetWithOptions(string, []byte, model.PluginKVSetOptions) (bo
 }
 func (conflictKV) KVDelete(string) *model.AppError { return nil }
 
-// fakePerm is a programmable PermissionChecker for D2 tests.
+// fakePerm is a programmable PermissionChecker for the membership policy tests.
 type fakePerm struct {
 	sysadmin   bool
 	managePub  bool
 	managePriv bool
+	member     *model.ChannelMember
+	memberErr  *model.AppError
+	// legacy fields, kept for tests that still drive the GetChannel path.
 	channel    *model.Channel
 	channelErr *model.AppError
 }
@@ -81,6 +84,10 @@ func (f *fakePerm) HasPermissionToChannel(_ string, _ string, p *model.Permissio
 
 func (f *fakePerm) GetChannel(_ string) (*model.Channel, *model.AppError) {
 	return f.channel, f.channelErr
+}
+
+func (f *fakePerm) GetChannelMember(_ string, _ string) (*model.ChannelMember, *model.AppError) {
+	return f.member, f.memberErr
 }
 
 // --- validation & presets ---
@@ -189,18 +196,19 @@ func TestSetTTLDeniesRegularMember(t *testing.T) {
 	assert.ErrorIs(t, err, ErrForbidden)
 }
 
-func TestSetTTLDMAllowsAnyParticipant(t *testing.T) {
-	// DM: any participant may set regardless of channel-property flags (D2).
-	perm := &fakePerm{channel: &model.Channel{Type: model.ChannelTypeDirect}}
+func TestSetTTLAllowsChannelMember(t *testing.T) {
+	// Any channel member may set a TTL, even without channel-admin permissions.
+	perm := &fakePerm{member: &model.ChannelMember{}}
 	svc := NewService(NewKVStore(newFakeKV()), perm)
-	require.NoError(t, svc.SetTTL(context.Background(), "u1", "dm1", time.Hour, time.UnixMilli(1)))
+	require.NoError(t, svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1)))
 }
 
-func TestSetTTLGroupAllowsParticipant(t *testing.T) {
-	// Group DM follows the same IsGroupOrDirect() path as DM (D2).
-	perm := &fakePerm{channel: &model.Channel{Type: model.ChannelTypeGroup}}
+func TestSetTTLDeniesNonMember(t *testing.T) {
+	// A user who is not a channel member (and holds no admin permission) is denied.
+	perm := &fakePerm{memberErr: &model.AppError{}}
 	svc := NewService(NewKVStore(newFakeKV()), perm)
-	require.NoError(t, svc.SetTTL(context.Background(), "u1", "g1", time.Hour, time.UnixMilli(1)))
+	err := svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1))
+	assert.ErrorIs(t, err, ErrForbidden)
 }
 
 func TestClearTTLDeniesRegularMember(t *testing.T) {
@@ -208,13 +216,6 @@ func TestClearTTLDeniesRegularMember(t *testing.T) {
 	svc := NewService(NewKVStore(newFakeKV()), perm)
 	err := svc.ClearTTL(context.Background(), "u1", "ch1")
 	assert.ErrorIs(t, err, ErrForbidden)
-}
-
-func TestSetTTLChannelNotFound(t *testing.T) {
-	perm := &fakePerm{channel: nil, channelErr: &model.AppError{}}
-	svc := NewService(NewKVStore(newFakeKV()), perm)
-	err := svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1))
-	assert.ErrorIs(t, err, ErrChannelNotFound)
 }
 
 // Regression (Mattermost 10.x): plugin.API.GetChannel returns (nil, nil) for a

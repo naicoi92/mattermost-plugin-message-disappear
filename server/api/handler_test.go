@@ -141,6 +141,9 @@ type stubPerm struct{ channel *model.Channel }
 func (stubPerm) HasPermissionTo(string, *model.Permission) bool                { return false }
 func (stubPerm) HasPermissionToChannel(string, string, *model.Permission) bool { return false }
 func (s stubPerm) GetChannel(string) (*model.Channel, *model.AppError)         { return s.channel, nil }
+func (stubPerm) GetChannelMember(string, string) (*model.ChannelMember, *model.AppError) {
+	return nil, nil
+}
 
 func TestPostTTLEndToEndValidationAndPermission(t *testing.T) {
 	kv := &stubKV{data: map[string][]byte{}}

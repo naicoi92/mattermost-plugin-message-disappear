@@ -3,7 +3,6 @@ package ttl
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -15,6 +14,7 @@ type PermissionChecker interface {
 	HasPermissionTo(userID string, permission *model.Permission) bool
 	HasPermissionToChannel(userID, channelID string, permission *model.Permission) bool
 	GetChannel(channelID string) (*model.Channel, *model.AppError)
+	GetChannelMember(channelID, userID string) (*model.ChannelMember, *model.AppError)
 }
 
 // Domain errors returned by the service. The API layer (V2.2) maps these to
@@ -86,38 +86,26 @@ func (s *Service) ClearTTL(ctx context.Context, actorID, channelID string) error
 	return s.store.Clear(channelID)
 }
 
-// checkCanManage enforces D2: system admin or channel admin for public/private
-// channels; any participant for DM/Group DMs (equal trust).
+// checkCanManage authorises a TTL change. Policy: any channel member may set or
+// clear a channel's TTL.
 //
-// The team-channel-admin path uses HasPermissionToChannel — the authoritative
-// channel-scoped permission — and does NOT need the channel object. This matters
-// because plugin.API.GetChannel has been observed to return (nil, nil) for an
-// otherwise-valid channel on Mattermost 10.x, which previously made every TTL
-// set on a team channel fail with "channel not found". GetChannel is now
-// consulted only to detect DM/Group DMs (whose participants hold no
-// channel-properties permission yet may set a TTL under D2). When GetChannel is
-// unavailable, DM/GM support degrades (the request is denied); team-channel
-// admins are unaffected.
-//
-// The design (D2) names the permission "ManageChannel"; the Mattermost model
-// splits it into ManagePublic/PrivateChannelProperties, which is what this uses.
+// Membership is verified with GetChannelMember — a distinct plugin-API call
+// from GetChannel (observed to return (nil, nil) for valid channels on
+// Mattermost 10.x) and from the permission system (HasPermissionTo /
+// HasPermissionToChannel under-report for system admins on the same version).
+// A system admin or channel-properties holder is still allowed outright as a
+// fast path, but membership is authoritative: a system admin viewing a channel
+// is a member, so a misbehaving fast path does not block them.
 func (s *Service) checkCanManage(actorID, channelID string) error {
 	if s.perm.HasPermissionTo(actorID, model.PermissionManageSystem) {
 		return nil
 	}
-	// Team-channel admin: the channel-scoped "manage properties" permission is
-	// authoritative and needs no channel object (robust to GetChannel returning nil).
 	if s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePublicChannelProperties) ||
 		s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePrivateChannelProperties) {
 		return nil
 	}
-	// DM/Group DM: any participant may set (equal trust, D2). Detecting a DM
-	// needs the channel type, so GetChannel is consulted here only.
-	ch, appErr := s.perm.GetChannel(channelID)
-	switch {
-	case appErr != nil:
-		return fmt.Errorf("%w: %s: %s", ErrChannelNotFound, channelID, appErr.Error())
-	case ch != nil && ch.IsGroupOrDirect():
+	// Any channel member may set a TTL.
+	if member, appErr := s.perm.GetChannelMember(channelID, actorID); appErr == nil && member != nil {
 		return nil
 	}
 	return ErrForbidden
