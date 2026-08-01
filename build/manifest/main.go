@@ -206,8 +206,18 @@ func applyManifest(manifest *model.Manifest) error {
 	return nil
 }
 
-// distManifest writes the manifest file to the dist directory
+// distManifest writes the manifest file to the dist directory, stamping the
+// short commit hash into the version as semver build metadata (e.g.
+// "1.1.0+abc1234") so every deployed build is traceable to its commit. The
+// source plugin.json and the generated server/webapp manifests stay clean;
+// only the deployed artifact carries the hash. BuildHashShort is injected via
+// -ldflags in build/setup.mk; when empty (not a git checkout) or already
+// present, the version is left unchanged.
 func distManifest(manifest *model.Manifest) error {
+	if BuildHashShort != "" && !strings.Contains(manifest.Version, "+") {
+		manifest.Version = manifest.Version + "+" + BuildHashShort
+	}
+
 	manifestBytes, err := json.MarshalIndent(manifest, "", "    ")
 	if err != nil {
 		return err
