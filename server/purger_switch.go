@@ -2,18 +2,12 @@ package main
 
 import (
 	"context"
-	"errors"
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin"
 
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/purge"
 )
-
-// errSchemaSkipped signals a fail-safe schema-guard skip (untested MM version).
-// It is an error so the sweeper keeps the index rows and retries next tick
-// instead of pruning them as if the posts had been purged.
-var errSchemaSkipped = errors.New("disappear: purge skipped — MM schema version not in allowlist")
 
 // Compile-time: the Mattermost plugin.API satisfies versionLogger.
 var _ versionLogger = (plugin.API)(nil)
@@ -31,9 +25,10 @@ type versionLogger interface {
 	LogError(msg string, keyvals ...any)
 }
 
-// configPurger implements purge.Purger and routes each purge to soft-delete, a
-// schema-guarded skip, or the transactional hard purge based on the live config.
-// It lets EnablePurge / PurgeSchemaAllowlist change at runtime without restarting.
+// configPurger implements purge.Purger and routes each purge to either the
+// transactional hard purge (when purgeDecision allows) or MM's soft-delete
+// (the always-safe fallback). EnablePurge / PurgeSchemaAllowlist may change at
+// runtime without restarting.
 type configPurger struct {
 	cfg  *configHolder
 	hard purge.Purger
@@ -46,18 +41,10 @@ func (p *configPurger) Purge(ctx context.Context, postIDs []string) (int, error)
 		return 0, nil
 	}
 	cfg := p.cfg.get()
-	switch purgeDecision(cfg.EnablePurge, p.api.GetLicense() != nil, p.api.GetServerVersion(), cfg.PurgeSchemaAllowlist()) {
-	case purgeSoft:
-		return p.softDelete(postIDs), nil
-	case purgeSkip:
-		// Fail-safe: untested MM schema -> touch nothing, alert, and return an error
-		// so the sweeper keeps the index rows for retry (returning nil would make the
-		// sweeper prune the rows, orphaning the posts from the plugin).
-		p.api.LogError("disappear: hard purge skipped — MM schema version not in allowlist (fail-safe)", "version", p.api.GetServerVersion())
-		return 0, errSchemaSkipped
-	default: // purgeHard
+	if purgeDecision(cfg.EnablePurge, p.api.GetLicense() != nil, p.api.GetServerVersion(), cfg.PurgeSchemaAllowlist()) == purgeHard {
 		return p.hard.Purge(ctx, postIDs)
 	}
+	return p.softDelete(postIDs), nil
 }
 
 // softDelete best-effort soft-deletes each post (EnablePurge off). Posts whose
