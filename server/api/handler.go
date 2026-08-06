@@ -147,11 +147,27 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// broadcast emits ttl_changed for a channel to its members.
+// broadcast emits ttl_changed for a channel to its members. The TTL value is
+// sent as a plain map rather than the ttlDTO struct: PublishWebSocketEvent
+// crosses the hashicorp go-plugin gob boundary, where an unexported struct
+// type is not registered ("gob: type not registered for interface: api.ttlDTO").
 func (h *Handler) broadcast(channelID string, t *ttlDTO) {
 	h.ws.PublishWebSocketEvent(EventTTLChanged,
-		map[string]any{"channel_id": channelID, "ttl": t},
+		map[string]any{"channel_id": channelID, "ttl": ttlToMap(t)},
 		&model.WebsocketBroadcast{ChannelId: channelID})
+}
+
+// ttlToMap renders a TTL DTO as a gob-safe primitive map for WebSocket events.
+// Keys mirror the ttlDTO JSON tags (duration / set_by / set_at) the webapp reads.
+func ttlToMap(t *ttlDTO) any {
+	if t == nil {
+		return nil
+	}
+	return map[string]any{
+		"duration": t.DurationSeconds,
+		"set_by":   t.SetBy,
+		"set_at":   t.SetAt,
+	}
 }
 
 // writeDomainError maps ttl domain errors to HTTP statuses (doc 06 §1).
@@ -163,8 +179,6 @@ func writeDomainError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, ttl.ErrChannelNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, ttl.ErrTooManyRetries):
-		writeError(w, http.StatusConflict, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	}

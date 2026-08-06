@@ -1,8 +1,8 @@
 package api
 
 import (
-	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/ttl"
+
+	_ "modernc.org/sqlite" // pure-Go sqlite driver for the end-to-end store
 )
 
 // Compile-time: the real ttl.Service satisfies the TTLManager port the API depends on.
@@ -114,6 +116,30 @@ func TestPostTTLValid(t *testing.T) {
 	assert.NotNil(t, ev.payload["ttl"])
 }
 
+// The ttl_changed WebSocket payload must carry a plain map, not the ttlDTO
+// struct: PublishWebSocketEvent crosses the go-plugin gob boundary, where an
+// unexported struct type is not registered ("gob: type not registered for
+// interface: api.ttlDTO").
+func TestBroadcastTTLIsGobSafeMap(t *testing.T) {
+	mgr, ws := newFakeTTL(), &fakeBroadcaster{}
+	h := New(mgr, ws)
+
+	body := strings.NewReader(`{"channel_id":"ch1","ttl_seconds":3600}`)
+	r := httptest.NewRequest(http.MethodPost, "/ttl", body)
+	r.Header.Set("Mattermost-User-ID", "u1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	ev := ws.last()
+	require.NotNil(t, ev)
+	ttl, ok := ev.payload["ttl"].(map[string]any)
+	require.Truef(t, ok, "ttl payload must be a gob-safe map, got %T", ev.payload["ttl"])
+	assert.Equal(t, int64(3600), ttl["duration"])
+	assert.Equal(t, "u1", ttl["set_by"])
+	assert.Contains(t, ttl, "set_at")
+}
+
 func TestPostTTLNoAuth(t *testing.T) {
 	h := New(newFakeTTL(), &fakeBroadcaster{})
 	r := httptest.NewRequest(http.MethodPost, "/ttl", strings.NewReader(`{}`))
@@ -122,29 +148,32 @@ func TestPostTTLNoAuth(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
-// stubKV + stubPerm drive the REAL ttl.Service end-to-end through HTTP, so the
-// handler's status mapping is verified against genuine validation/permission.
-type stubKV struct{ data map[string][]byte }
-
-func (s *stubKV) KVGet(k string) ([]byte, *model.AppError) { return bytes.Clone(s.data[k]), nil }
-func (s *stubKV) KVSetWithOptions(k string, v []byte, opts model.PluginKVSetOptions) (bool, *model.AppError) {
-	if opts.Atomic && !bytes.Equal(s.data[k], opts.OldValue) {
-		return false, nil
-	}
-	s.data[k] = bytes.Clone(v)
-	return true, nil
+// newSQLStore + stubPerm drive the REAL ttl.Service end-to-end through HTTP, so
+// the handler's status mapping is verified against genuine validation/permission.
+func newSQLStore(t *testing.T) ttl.TTLSettingStore {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	store := ttl.NewSQLStore(db, "sqlite")
+	require.NoError(t, store.Migrate(context.Background()))
+	return store
 }
-func (s *stubKV) KVDelete(k string) *model.AppError { delete(s.data, k); return nil }
 
 type stubPerm struct{ channel *model.Channel }
 
 func (stubPerm) HasPermissionTo(string, *model.Permission) bool                { return false }
 func (stubPerm) HasPermissionToChannel(string, string, *model.Permission) bool { return false }
 func (s stubPerm) GetChannel(string) (*model.Channel, *model.AppError)         { return s.channel, nil }
+func (stubPerm) GetChannelMember(string, string) (*model.ChannelMember, *model.AppError) {
+	return nil, nil
+}
+
+func (stubPerm) LogError(_ string, _ ...any) {}
 
 func TestPostTTLEndToEndValidationAndPermission(t *testing.T) {
-	kv := &stubKV{data: map[string][]byte{}}
-	svc := ttl.NewService(ttl.NewKVStore(kv), stubPerm{channel: &model.Channel{Type: model.ChannelTypeOpen}})
+	svc := ttl.NewService(newSQLStore(t), stubPerm{channel: &model.Channel{Type: model.ChannelTypeOpen}})
 	h := New(svc, &fakeBroadcaster{})
 
 	// invalid range (< 1m) -> 400 via real validation
@@ -311,17 +340,6 @@ func TestPostTTLMapsNotFound(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	assert.Equal(t, http.StatusNotFound, w.Code)
-}
-
-func TestPostTTLMapsConflict(t *testing.T) {
-	mgr := newFakeTTL()
-	mgr.setErr = ttl.ErrTooManyRetries
-	h := New(mgr, &fakeBroadcaster{})
-	r := httptest.NewRequest(http.MethodPost, "/ttl", strings.NewReader(`{"channel_id":"ch1","ttl_seconds":3600}`))
-	r.Header.Set("Mattermost-User-ID", "u1")
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	assert.Equal(t, http.StatusConflict, w.Code)
 }
 
 func TestGetTTLMapsError(t *testing.T) {

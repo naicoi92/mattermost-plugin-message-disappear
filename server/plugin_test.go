@@ -1,13 +1,12 @@
 package main
 
 import (
-	"context"
 	"database/sql"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	_ "modernc.org/sqlite" // pure-Go sqlite for wiring the expiry index in tests
+	_ "modernc.org/sqlite" // pure-Go sqlite for the injected in-memory DB
 
 	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/mattermost/mattermost/server/public/plugin/plugintest"
@@ -17,7 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/api"
-	"github.com/naicoi92/mattermost-plugin-message-disappear/server/expiry"
 )
 
 // stubLogInfo registers tolerant LogInfo expectations on the test API.
@@ -36,9 +34,18 @@ func activatedPlugin(t *testing.T) *Plugin {
 	mp := &plugintest.API{}
 	stubLogInfo(mp)
 	mp.On("RegisterCommand", mock.Anything).Maybe().Return(nil)
-	mp.On("KVGet", mock.Anything).Maybe().Return([]byte(nil), (*model.AppError)(nil))
 	mp.On("LoadPluginConfiguration", mock.Anything).Maybe().Return(nil)
 	p.API = mp
+
+	// Inject an in-memory DB so OnActivate wires the TTL service + expire index.
+	// The sweeper stays off: tests set no Driver.
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	p.db = db
+	p.sqlDriver = "sqlite"
+
 	require.NoError(t, p.OnActivate())
 	return p
 }
@@ -81,27 +88,4 @@ func TestDisappearCommand(t *testing.T) {
 	cmd := (&Plugin{}).disappearCommand()
 	assert.Equal(t, api.CommandTrigger, cmd.Trigger)
 	assert.True(t, cmd.AutoComplete)
-}
-
-func TestMessageHasBeenPostedIsNoOpWhenExpiryDisabled(t *testing.T) {
-	p := &Plugin{} // expiryService is nil (no DB)
-	require.NotPanics(t, func() {
-		p.MessageHasBeenPosted(nil, &model.Post{Id: "post-1", CreateAt: 1, Message: "hello"})
-	})
-}
-
-// When the expire index is wired, MessageHasBeenPosted runs OnPostCreated through it.
-func TestMessageHasBeenPostedRunsExpiryWhenWired(t *testing.T) {
-	p := activatedPlugin(t)
-	db, err := sql.Open("sqlite", ":memory:")
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-	store := expiry.NewSQLStore(db)
-	require.NoError(t, store.Migrate(context.Background()))
-	p.expiryService = expiry.NewService(store, p.ttlService)
-
-	// TTL not set (KVGet mock returns empty) -> OnPostCreated skips indexing, no panic.
-	require.NotPanics(t, func() {
-		p.MessageHasBeenPosted(nil, &model.Post{Id: "p1", ChannelId: "c1", CreateAt: 1000})
-	})
 }

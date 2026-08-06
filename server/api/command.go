@@ -72,16 +72,16 @@ func (h *Handler) cmdStatus(args *model.CommandArgs) (*model.CommandResponse, *m
 	return ephemeral(args.ChannelId, fmt.Sprintf(":hourglass_flowing_sand: Disappearing messages on — auto-delete after %s.", d.String())), nil
 }
 
-// parseTTLArg resolves a preset label (30s/5m/1h/8h/1d/1w) or a Go duration
-// (e.g. 45m, 2h). Note: time.ParseDuration does not accept "d"/"w" suffixes, so
-// multi-day custom values use hours (e.g. 48h); presets cover 1d and 1w.
+// parseTTLArg resolves a preset label (5m/1h/8h/1d/1w/1mo) or a Go duration
+// (e.g. 45m, 2h). Note: time.ParseDuration does not accept "d"/"w"/"mo" suffixes,
+// so custom multi-day values use hours (e.g. 48h); presets cover 1d, 1w and 1mo.
 func parseTTLArg(s string) (time.Duration, error) {
 	if p, ok := ttl.PresetForLabel(s); ok {
 		return p.Duration, nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
-		return 0, fmt.Errorf("`%s` is not a valid duration (try 1h, 30s, 1d, 45m)", s)
+		return 0, fmt.Errorf("`%s` is not a valid duration (try 1h, 30s, 1d, 1mo, 45m)", s)
 	}
 	return d, nil
 }
@@ -109,5 +109,5 @@ func ephemeral(channelID, text string) *model.CommandResponse {
 }
 
 func helpText() string {
-	return "`/disappear set <duration>` (5m, 1h, 8h, 1d, 1w, or custom 1m–1y) · `/disappear status` · `/disappear off`"
+	return "`/disappear set <duration>` (5m, 1h, 8h, 1d, 1w, 1mo, or custom 1m–1y) · `/disappear status` · `/disappear off`"
 }

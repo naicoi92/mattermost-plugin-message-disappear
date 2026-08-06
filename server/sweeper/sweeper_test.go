@@ -4,118 +4,165 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/naicoi92/mattermost-plugin-message-disappear/server/expiry"
+	"github.com/naicoi92/mattermost-plugin-message-disappear/server/retention"
+	"github.com/naicoi92/mattermost-plugin-message-disappear/server/ttl"
 )
 
 // --- fakes ---
 
-type fakeStore struct {
-	expired []expiry.Entry
-	pruned  []string
-	getErr  error
-	delErr  error
+type fakeTTLSource struct {
+	channels []ttl.ChannelTTL
+	err      error
 }
 
-func (f *fakeStore) GetExpired(_ context.Context, _ int64, _ int) ([]expiry.Entry, error) {
-	out := f.expired
-	f.expired = nil
-	return out, f.getErr
+func (f fakeTTLSource) Channels(context.Context) ([]ttl.ChannelTTL, error) { return f.channels, f.err }
+
+type fakeFinder struct {
+	aged   map[string][]retention.AgedPost
+	err    error
+	called map[string]int64 // channelID -> last thresholdMs seen
 }
 
-func (f *fakeStore) DeleteByPostIDs(_ context.Context, postIDs []string) error {
-	f.pruned = append(f.pruned, postIDs...)
-	return f.delErr
+func (f *fakeFinder) AgedThreads(_ context.Context, channelID string, thresholdMs int64, _ int) ([]retention.AgedPost, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.called == nil {
+		f.called = map[string]int64{}
+	}
+	f.called[channelID] = thresholdMs
+	return f.aged[channelID], nil
 }
 
 type fakePurger struct {
-	calls [][]string
-	err   error
+	purged []string
+	err    error
 }
 
-func (p *fakePurger) Purge(_ context.Context, postIDs []string) (int, error) {
-	p.calls = append(p.calls, append([]string(nil), postIDs...))
-	return len(postIDs), p.err
+func (f *fakePurger) Purge(_ context.Context, ids []string) (int, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	f.purged = append(f.purged, ids...)
+	return len(ids), nil
 }
 
-type captureLogger struct {
-	errors []string
+// captureAPI satisfies sweeper.API: records log lines and WebSocket events.
+type captureAPI struct {
+	infos, errors []string
+	events        []string // published event names
 }
 
-func (l *captureLogger) LogError(msg string, _ ...any) {
-	l.errors = append(l.errors, msg)
+func (a *captureAPI) LogInfo(msg string, _ ...any)  { a.infos = append(a.infos, msg) }
+func (a *captureAPI) LogError(msg string, _ ...any) { a.errors = append(a.errors, msg) }
+func (a *captureAPI) PublishWebSocketEvent(event string, _ map[string]any, _ *model.WebsocketBroadcast) {
+	a.events = append(a.events, event)
 }
 
-func newSweeper(store *fakeStore, purger *fakePurger) (*Sweeper, *captureLogger) {
-	log := &captureLogger{}
-	return New(store, purger, log, 10), log
+func newSweeper(t *testing.T, ttls TTLSource, finder *fakeFinder, purger *fakePurger) (*Sweeper, *captureAPI) {
+	t.Helper()
+	api := &captureAPI{}
+	return New(ttls, finder, purger, api, 10), api
 }
 
 // --- tests ---
 
-func TestRunPurgesBatchAndPrunes(t *testing.T) {
-	store := &fakeStore{expired: []expiry.Entry{{PostID: "p1"}, {PostID: "p2"}}}
+func TestRunPurgesAgedPerChannelAndNotifies(t *testing.T) {
+	ttls := fakeTTLSource{channels: []ttl.ChannelTTL{
+		{ChannelID: "c1", TTL: 5 * time.Minute},
+		{ChannelID: "c2", TTL: time.Hour},
+	}}
+	finder := &fakeFinder{aged: map[string][]retention.AgedPost{
+		"c1": {{PostID: "p1"}, {PostID: "p2"}},
+		"c2": {{PostID: "p3"}},
+	}}
 	purger := &fakePurger{}
-	sw, log := newSweeper(store, purger)
+	sw, api := newSweeper(t, ttls, finder, purger)
 
 	sw.Run()
 
-	require.Len(t, purger.calls, 1)
-	assert.Equal(t, []string{"p1", "p2"}, purger.calls[0], "whole batch purged in one call")
-	assert.Equal(t, []string{"p1", "p2"}, store.pruned, "both rows pruned")
-	assert.Empty(t, log.errors)
+	assert.ElementsMatch(t, []string{"p1", "p2", "p3"}, purger.purged)
+	require.Len(t, api.infos, 2, "one info log per purged channel")
+	// one post_deleted WebSocket event per purged post (so the webapp clears them).
+	require.Len(t, api.events, 3, "a post_deleted event per purged post")
+	for _, e := range api.events {
+		assert.Equal(t, "post_deleted", e)
+	}
+	assert.Empty(t, api.errors)
 }
 
-func TestRunNoExpiredIsNoOp(t *testing.T) {
-	store := &fakeStore{}
+func TestRunThresholdIsNowMinusTTL(t *testing.T) {
+	ttls := fakeTTLSource{channels: []ttl.ChannelTTL{{ChannelID: "c1", TTL: 5 * time.Minute}}}
+	finder := &fakeFinder{aged: map[string][]retention.AgedPost{"c1": {{PostID: "p1"}}}}
 	purger := &fakePurger{}
-	sw, log := newSweeper(store, purger)
+	const now = int64(1_000_000)
+	sw := &Sweeper{ttls: ttls, finder: finder, purger: purger, api: &captureAPI{}, batchSize: 10, now: func() int64 { return now }}
 
 	sw.Run()
 
-	assert.Empty(t, purger.calls)
-	assert.Empty(t, store.pruned)
-	assert.Empty(t, log.errors)
+	// threshold = now - ttl = 1_000_000 - 300_000.
+	assert.Equal(t, now-5*time.Minute.Milliseconds(), finder.called["c1"])
 }
 
-func TestRunPurgeErrorKeepsRowsForRetry(t *testing.T) {
-	store := &fakeStore{expired: []expiry.Entry{{PostID: "p1"}}}
-	purger := &fakePurger{err: errors.New("tx failed")}
-	sw, log := newSweeper(store, purger)
-
-	sw.Run()
-
-	require.Len(t, purger.calls, 1)
-	assert.Empty(t, store.pruned, "rows kept so the batch is retried next tick (no partial purge)")
-	require.Len(t, log.errors, 1)
-}
-
-func TestRunQueryErrorLogsAndStops(t *testing.T) {
-	store := &fakeStore{expired: []expiry.Entry{{PostID: "p1"}}, getErr: errors.New("db down")}
+func TestRunEmptyChannelSkips(t *testing.T) {
+	ttls := fakeTTLSource{channels: []ttl.ChannelTTL{{ChannelID: "c1", TTL: time.Minute}}}
+	finder := &fakeFinder{aged: map[string][]retention.AgedPost{"c1": nil}} // nothing aged
 	purger := &fakePurger{}
-	sw, log := newSweeper(store, purger)
+	sw, api := newSweeper(t, ttls, finder, purger)
 
 	sw.Run()
 
-	assert.Empty(t, purger.calls, "no purge when the query fails")
-	require.Len(t, log.errors, 1)
+	assert.Empty(t, purger.purged)
+	assert.Empty(t, api.infos, "no log/event for an empty channel")
+	assert.Empty(t, api.events)
 }
 
-func TestRunPruneErrorIsLogged(t *testing.T) {
-	store := &fakeStore{expired: []expiry.Entry{{PostID: "p1"}}, delErr: errors.New("prune failed")}
+func TestRunPurgeFailLogsAndContinues(t *testing.T) {
+	ttls := fakeTTLSource{channels: []ttl.ChannelTTL{
+		{ChannelID: "c1", TTL: time.Minute},
+		{ChannelID: "c2", TTL: time.Minute},
+	}}
+	finder := &fakeFinder{aged: map[string][]retention.AgedPost{"c1": {{PostID: "p1"}}, "c2": {{PostID: "p2"}}}}
+	purger := &fakePurger{err: errors.New("boom")}
+	sw, api := newSweeper(t, ttls, finder, purger)
+
+	sw.Run()
+
+	assert.Empty(t, purger.purged, "purge failed, nothing recorded")
+	require.Len(t, api.errors, 2, "purge failure logged per channel")
+	assert.Empty(t, api.events, "no post_deleted emitted when purge failed")
+	assert.Empty(t, api.infos)
+}
+
+func TestRunFinderFailContinues(t *testing.T) {
+	ttls := fakeTTLSource{channels: []ttl.ChannelTTL{
+		{ChannelID: "c1", TTL: time.Minute},
+		{ChannelID: "c2", TTL: time.Minute},
+	}}
+	finder := &fakeFinder{err: errors.New("query boom")}
 	purger := &fakePurger{}
-	sw, log := newSweeper(store, purger)
+	sw, api := newSweeper(t, ttls, finder, purger)
 
 	sw.Run()
 
-	require.Len(t, purger.calls, 1, "posts still purged")
-	require.Len(t, log.errors, 1, "prune failure is logged")
+	assert.Empty(t, purger.purged)
+	require.Len(t, api.errors, 2, "finder failure logged per channel; sweep continues")
 }
 
-func TestNewDefaultsBatchSize(t *testing.T) {
-	sw := New(&fakeStore{}, &fakePurger{}, &captureLogger{}, 0)
-	assert.Equal(t, defaultBatchSize, sw.batchSize)
+func TestRunTTLSourceFailReturns(t *testing.T) {
+	ttls := fakeTTLSource{err: errors.New("list boom")}
+	finder := &fakeFinder{}
+	purger := &fakePurger{}
+	sw, api := newSweeper(t, ttls, finder, purger)
+
+	sw.Run()
+
+	assert.Empty(t, purger.purged)
+	require.Len(t, api.errors, 1)
 }

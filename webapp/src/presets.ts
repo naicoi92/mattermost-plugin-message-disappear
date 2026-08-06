@@ -12,6 +12,7 @@ export const PRESETS: readonly TTLPreset[] = [
     {label: '8 hours', shortLabel: '8h', seconds: 28800},
     {label: '1 day', shortLabel: '1d', seconds: 86400},
     {label: '1 week', shortLabel: '1w', seconds: 604800},
+    {label: '1 month', shortLabel: '1mo', seconds: 2592000},
 ];
 
 // shortDuration renders a compact label for a TTL (seconds) for the header icon.

@@ -31,7 +31,16 @@ default: all
 # and HAS_PUBLIC as needed. Also compiles build/bin/manifest and build/bin/pluginctl.
 include build/setup.mk
 
-BUNDLE_NAME ?= $(PLUGIN_ID)-$(PLUGIN_VERSION).tar.gz
+# Stamp the short commit hash into the deploy version + bundle name
+# (e.g. 1.1.0+abc1234) so every deployed build is traceable to its commit.
+# BUILD_HASH_SHORT is gathered in build/setup.mk; falls back to the plain
+# version when not in a git checkout.
+ifeq ($(BUILD_HASH_SHORT),)
+DEPLOY_VERSION ?= $(PLUGIN_VERSION)
+else
+DEPLOY_VERSION ?= $(PLUGIN_VERSION)+$(BUILD_HASH_SHORT)
+endif
+BUNDLE_NAME ?= $(PLUGIN_ID)-$(DEPLOY_VERSION).tar.gz
 
 # Include custom targets and environment variables, if present.
 ifneq ($(wildcard build/custom.mk),)
@@ -143,10 +152,12 @@ dist-linux-amd64: apply server-linux-amd64 webapp bundle  ## Build linux/amd64 o
 
 .PHONY: deploy
 deploy: dist  ## Build (all platforms) and deploy via pluginctl (force upload + enable)
+	@echo "==> Deploying $(PLUGIN_ID) $(DEPLOY_VERSION) (commit $(BUILD_HASH_SHORT))"
 	./build/bin/pluginctl deploy $(PLUGIN_ID) dist/$(BUNDLE_NAME)
 
 .PHONY: deploy-linux-amd64
 deploy-linux-amd64: dist-linux-amd64  ## Build linux/amd64 only and deploy (suited for Mattermost on k8s)
+	@echo "==> Deploying $(PLUGIN_ID) $(DEPLOY_VERSION) (commit $(BUILD_HASH_SHORT))"
 	./build/bin/pluginctl deploy $(PLUGIN_ID) dist/$(BUNDLE_NAME)
 
 .PHONY: disable

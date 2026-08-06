@@ -3,7 +3,6 @@ package ttl
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/mattermost/mattermost/server/public/model"
@@ -15,6 +14,8 @@ type PermissionChecker interface {
 	HasPermissionTo(userID string, permission *model.Permission) bool
 	HasPermissionToChannel(userID, channelID string, permission *model.Permission) bool
 	GetChannel(channelID string) (*model.Channel, *model.AppError)
+	GetChannelMember(channelID, userID string) (*model.ChannelMember, *model.AppError)
+	LogError(msg string, keyvals ...any)
 }
 
 // Domain errors returned by the service. The API layer (V2.2) maps these to
@@ -29,6 +30,9 @@ var (
 type Service struct {
 	store TTLSettingStore
 	perm  PermissionChecker
+	// OnTTLChanged, if set, fires after a TTL is successfully set, with the
+	// channel id and duration. The plugin uses it to backfill existing posts.
+	OnTTLChanged func(channelID string, d time.Duration)
 }
 
 // NewService wires a TTL service with its persistence and permission ports.
@@ -47,11 +51,17 @@ func (s *Service) SetTTL(ctx context.Context, actorID, channelID string, d time.
 	if err := s.checkCanManage(actorID, channelID); err != nil {
 		return err
 	}
-	return s.store.Set(channelID, TTLSetting{
+	if err := s.store.Set(channelID, TTLSetting{
 		DurationSeconds: int64(d.Seconds()),
 		SetBy:           actorID,
 		SetAt:           setAt.UnixMilli(),
-	})
+	}); err != nil {
+		return err
+	}
+	if s.OnTTLChanged != nil {
+		s.OnTTLChanged(channelID, d)
+	}
+	return nil
 }
 
 // GetTTL returns the channel's TTL and whether one is set. Unset channels
@@ -86,32 +96,37 @@ func (s *Service) ClearTTL(ctx context.Context, actorID, channelID string) error
 	return s.store.Clear(channelID)
 }
 
-// checkCanManage enforces D2: system admin or channel admin for public/private
-// channels; any participant for DM/Group DMs (equal trust).
+// checkCanManage authorises a TTL change. Policy: any channel member may set or
+// clear a channel's TTL.
 //
-// The design (D2) names the permission "ManageChannel"; the Mattermost model
-// splits it into ManagePublic/PrivateChannelProperties, which is what this uses.
+// Membership is verified with GetChannelMember — a distinct plugin-API call
+// from GetChannel (observed to return (nil, nil) for valid channels on
+// Mattermost 10.x) and from the permission system (HasPermissionTo /
+// HasPermissionToChannel, which under-report for system admins on the same
+// version). System and channel admins remain fast paths; membership is
+// authoritative.
+//
+// When every path fails the raw result of each plugin-API call is logged, so a
+// misbehaving server is identifiable from the plugin logs.
 func (s *Service) checkCanManage(actorID, channelID string) error {
 	if s.perm.HasPermissionTo(actorID, model.PermissionManageSystem) {
 		return nil
 	}
-	ch, appErr := s.perm.GetChannel(channelID)
-	if appErr != nil {
-		return fmt.Errorf("%w: %s: %s", ErrChannelNotFound, channelID, appErr.Error())
-	}
-	if ch == nil {
-		return fmt.Errorf("%w: %s: nil channel, no app error", ErrChannelNotFound, channelID)
-	}
-	if ch.IsGroupOrDirect() {
-		// DM/Group DM: any participant may set (equal trust, D2). Membership is
-		// guaranteed by the API layer — the actor can only reach channels they are in.
+	managePub := s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePublicChannelProperties)
+	managePriv := s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePrivateChannelProperties)
+	if managePub || managePriv {
 		return nil
 	}
-	if ch.IsOpen() && s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePublicChannelProperties) {
+	member, memErr := s.perm.GetChannelMember(channelID, actorID)
+	if memErr == nil && member != nil {
 		return nil
 	}
-	if !ch.IsOpen() && s.perm.HasPermissionToChannel(actorID, channelID, model.PermissionManagePrivateChannelProperties) {
-		return nil
-	}
+	// Diagnostic: every authorisation path failed — log what each call returned.
+	ch, chErr := s.perm.GetChannel(channelID)
+	s.perm.LogError("disappear: TTL authorisation denied",
+		"actor", actorID, "channel_id", channelID,
+		"manage_pub", managePub, "manage_priv", managePriv,
+		"member_nil", member == nil, "member_err", memErr,
+		"channel_nil", ch == nil, "channel_err", chErr)
 	return ErrForbidden
 }

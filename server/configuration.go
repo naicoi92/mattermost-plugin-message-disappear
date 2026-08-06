@@ -69,26 +69,27 @@ func versionAllowed(serverVersion string, allowlist []string) bool {
 type purgeMode string
 
 const (
-	purgeSoft purgeMode = "soft" // soft-delete (EnablePurge off, or Enterprise legal-hold safety)
-	purgeSkip purgeMode = "skip" // untested schema -> fail-safe, touch nothing
+	purgeSoft purgeMode = "soft" // soft-delete (EnablePurge off, Enterprise legal-hold, or untested schema)
 	purgeHard purgeMode = "hard" // transactional DB purge
 )
 
 // purgeDecision picks the sweeper's deletion mode for the current config + server
 // edition/version.
 //
-// On Enterprise the plugin's direct DB DELETE would bypass legal-hold (which MM
-// enforces at the API/store layer, not the DB). The plugin API exposes no way to
-// query legal-hold, so on a licensed (Enterprise) server the sweeper falls back to
-// soft-delete so MM's DeletePost honours it (D11: do not bypass compliance). This
-// check short-circuits before the schema guard, so an EE server with an untested
-// schema still soft-deletes rather than skipping.
+// Hard purge runs only when ALL hold: EnablePurge is on, the server is not
+// Enterprise-licensed (a direct DB DELETE would bypass legal-hold, which MM
+// enforces at the API/store layer — D11), and the server version matches the
+// schema allowlist (D10 risk mitigation: the hard-purge footprint uses hardcoded
+// table/column names verified only for allowlisted versions).
+//
+// Otherwise the sweeper soft-deletes via MM's DeletePost. Soft-delete is
+// schema-agnostic and honours legal-hold, so it is always safe — including the
+// previously-skipped "untested schema" case. Skipping made "enable purge" a
+// silent no-op (messages never cleaned), which is worse than the default; the
+// safe floor is now soft-delete, never "do nothing".
 func purgeDecision(enablePurge, isEnterprise bool, serverVersion string, allowlist []string) purgeMode {
-	if !enablePurge || isEnterprise {
-		return purgeSoft
+	if enablePurge && !isEnterprise && versionAllowed(serverVersion, allowlist) {
+		return purgeHard
 	}
-	if !versionAllowed(serverVersion, allowlist) {
-		return purgeSkip
-	}
-	return purgeHard
+	return purgeSoft
 }

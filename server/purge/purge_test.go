@@ -19,9 +19,9 @@ func setupFootprintDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { _ = db.Close() })
 	for _, ddl := range []string{
 		`CREATE TABLE posts (id TEXT PRIMARY KEY)`,
-		`CREATE TABLE fileinfo (post_id TEXT)`,
-		`CREATE TABLE reactions (post_id TEXT)`,
-		`CREATE TABLE mentions (post_id TEXT)`,
+		`CREATE TABLE fileinfo (postid TEXT)`,
+		`CREATE TABLE reactions (postid TEXT)`,
+		`CREATE TABLE threads (postid TEXT)`,
 	} {
 		_, err := db.Exec(ddl)
 		require.NoError(t, err)
@@ -34,9 +34,9 @@ func seed(t *testing.T, db *sql.DB, postID string) {
 	t.Helper()
 	for _, q := range []string{
 		`INSERT INTO posts (id) VALUES (?)`,
-		`INSERT INTO fileinfo (post_id) VALUES (?)`,
-		`INSERT INTO reactions (post_id) VALUES (?)`,
-		`INSERT INTO mentions (post_id) VALUES (?)`,
+		`INSERT INTO fileinfo (postid) VALUES (?)`,
+		`INSERT INTO reactions (postid) VALUES (?)`,
+		`INSERT INTO threads (postid) VALUES (?)`,
 	} {
 		_, err := db.Exec(q, postID)
 		require.NoError(t, err)
@@ -52,7 +52,7 @@ func count(t *testing.T, db *sql.DB, table, col, postID string) int {
 
 func TestPurgeEmptyIsNoOp(t *testing.T) {
 	db := setupFootprintDB(t)
-	n, err := NewSQLPurger(db).Purge(context.Background(), nil)
+	n, err := NewSQLPurger(db, "sqlite").Purge(context.Background(), nil)
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
 }
@@ -63,7 +63,7 @@ func TestPurgeDeletesFullFootprint(t *testing.T) {
 	seed(t, db, "p2")
 	seed(t, db, "p3") // must survive
 
-	n, err := NewSQLPurger(db).Purge(context.Background(), []string{"p1", "p2"})
+	n, err := NewSQLPurger(db, "sqlite").Purge(context.Background(), []string{"p1", "p2"})
 	require.NoError(t, err)
 	assert.Equal(t, 2, n)
 
@@ -78,10 +78,10 @@ func TestPurgeIsIdempotent(t *testing.T) {
 	db := setupFootprintDB(t)
 	seed(t, db, "p1")
 
-	_, err := NewSQLPurger(db).Purge(context.Background(), []string{"p1"})
+	_, err := NewSQLPurger(db, "sqlite").Purge(context.Background(), []string{"p1"})
 	require.NoError(t, err)
 	// Purging again (already deleted) is a no-op, no error.
-	n, err := NewSQLPurger(db).Purge(context.Background(), []string{"p1"})
+	n, err := NewSQLPurger(db, "sqlite").Purge(context.Background(), []string{"p1"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
 	assert.Equal(t, 0, count(t, db, "posts", "id", "p1"))
@@ -100,7 +100,7 @@ func TestPurgeRollbackOnError(t *testing.T) {
 	}{"nope_table", "post_id"})
 	t.Cleanup(func() { footprint = orig })
 
-	_, err := NewSQLPurger(db).Purge(context.Background(), []string{"p1"})
+	_, err := NewSQLPurger(db, "sqlite").Purge(context.Background(), []string{"p1"})
 	require.Error(t, err)
 	// Rollback preserved every footprint row (atomicity, no partial purge).
 	for _, f := range footprint[:len(footprint)-1] {

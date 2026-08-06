@@ -23,8 +23,8 @@ func TestPurgeDecision(t *testing.T) {
 	assert.Equal(t, purgeSoft, purgeDecision(false, false, "10.0.0", []string{"10."}), "EnablePurge off -> soft")
 	assert.Equal(t, purgeSoft, purgeDecision(true, true, "10.5.0", []string{"10."}), "Enterprise -> soft (legal-hold safety)")
 	assert.Equal(t, purgeSoft, purgeDecision(true, true, "9.0.0", []string{"10."}), "EE + untested schema -> still soft (legal-hold trumps schema guard)")
-	assert.Equal(t, purgeSkip, purgeDecision(true, false, "9.0.0", []string{"10."}), "untested version -> skip (fail-safe)")
-	assert.Equal(t, purgeSkip, purgeDecision(true, false, "10.0.0", nil), "empty allowlist -> skip")
+	assert.Equal(t, purgeSoft, purgeDecision(true, false, "9.0.0", []string{"10."}), "untested version -> soft (no-op footgun removed)")
+	assert.Equal(t, purgeSoft, purgeDecision(true, false, "10.0.0", nil), "empty allowlist -> soft (enable purge must never be a no-op)")
 	assert.Equal(t, purgeHard, purgeDecision(true, false, "10.5.0", []string{"10.", "11."}), "Team + allowed -> hard")
 }
 
@@ -87,14 +87,16 @@ func TestConfigPurgerHardPath(t *testing.T) {
 	assert.Empty(t, vl.errors)
 }
 
-func TestConfigPurgerSkipPath(t *testing.T) {
+func TestConfigPurgerUntestedSchemaSoftDeletes(t *testing.T) {
+	// EnablePurge on but schema not allowlisted -> must soft-delete, not skip.
+	// Skipping made "enable purge" a no-op (messages never cleaned). (Bug A fix.)
 	cp, hard, soft, vl := newConfigPurger(t, true, false, "10.,11.", "9.0.0") // untested schema
 	n, err := cp.Purge(context.Background(), []string{"p1"})
-	require.ErrorIs(t, err, errSchemaSkipped, "skip returns the sentinel so the sweeper keeps the rows for retry")
-	assert.Equal(t, 0, n, "skip touches no data")
-	assert.Equal(t, 0, hard.called)
-	assert.Empty(t, soft.deleted)
-	require.Len(t, vl.errors, 1, "skip is alerted")
+	require.NoError(t, err, "untested schema soft-deletes; no sentinel error")
+	assert.Equal(t, 1, n)
+	assert.Equal(t, 0, hard.called, "hard purge not used on untested schema")
+	assert.Equal(t, []string{"p1"}, soft.deleted, "soft-delete is the safe fallback")
+	assert.Empty(t, vl.errors, "soft fallback is not an error")
 }
 
 func TestConfigPurgerSoftPath(t *testing.T) {
