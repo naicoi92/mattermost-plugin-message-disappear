@@ -35,24 +35,27 @@ beforeEach(() => {
     mockTtlValue = null;
 });
 
-it('shows "Off" when no TTL is set, and the duration when one is', () => {
+it('shows "Off" when no TTL is set, and the short duration on the button when one is', () => {
     const {rerender} = render(wrap(<ChannelHeaderButton {...props}/>));
     expect(toggle()).toHaveTextContent('Off');
 
     mockTtlValue = {duration: 86400, set_by: 'u', set_at: 1};
     rerender(wrap(<ChannelHeaderButton {...props}/>));
+    // The toggle button stays abbreviated ("1d"); only the dropdown items are full.
     expect(toggle()).toHaveTextContent('1d');
 });
 
-it('opens the preset dropdown on click (Off + presets, no Custom)', () => {
+it('opens the preset dropdown on click (Off + full-label presets, no Custom)', () => {
     render(wrap(<ChannelHeaderButton {...props}/>));
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     fireEvent.click(toggle());
 
     const menu = screen.getByRole('menu');
     expect(within(menu).getByRole('menuitem', {name: /off/i})).toBeInTheDocument();
-    expect(within(menu).getByRole('menuitem', {name: '1d'})).toBeInTheDocument();
-    expect(within(menu).getByRole('menuitem', {name: '1w'})).toBeInTheDocument();
+    // Dropdown items use the full label, not the short one.
+    expect(within(menu).getByRole('menuitem', {name: '1 day'})).toBeInTheDocument();
+    expect(within(menu).getByRole('menuitem', {name: '1 week'})).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', {name: /^1d$/})).not.toBeInTheDocument();
     // No Custom entry — quick presets only.
     expect(screen.queryByRole('menuitem', {name: /custom/i})).not.toBeInTheDocument();
 });
@@ -60,7 +63,7 @@ it('opens the preset dropdown on click (Off + presets, no Custom)', () => {
 it('selecting a preset sets the channel TTL with the right duration and closes', () => {
     render(wrap(<ChannelHeaderButton {...props}/>));
     fireEvent.click(toggle());
-    fireEvent.click(screen.getByRole('menuitem', {name: '1d'}));
+    fireEvent.click(screen.getByRole('menuitem', {name: '1 day'}));
     expect(setTTL).toHaveBeenCalledWith('ch-current', 86400);
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
 });

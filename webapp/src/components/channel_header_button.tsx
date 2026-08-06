@@ -92,7 +92,7 @@ export default function ChannelHeaderButton({channel}: {channel?: {id: string}})
                                 set_at: Date.now(),
                             })}
                         >
-                            {p.shortLabel}
+                            {p.label}
                         </button>
                     ))}
                 </div>
