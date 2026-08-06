@@ -39,6 +39,21 @@ func (s *Service) Migrate(ctx context.Context) error {
 	return s.store.Migrate(ctx)
 }
 
+// BackfillChannel indexes every existing live post in the channel so it ages
+// out after the TTL is set (not only messages posted afterwards). Posts are
+// thread-grouped: a thread is purged as a unit once its newest message ages
+// past the TTL. No-op when the channel has no TTL.
+func (s *Service) BackfillChannel(ctx context.Context, channelID string) error {
+	d, hasTTL, err := s.ttl.GetTTL(ctx, channelID)
+	if err != nil {
+		return err
+	}
+	if !hasTTL {
+		return nil
+	}
+	return s.store.BackfillChannel(ctx, channelID, d.Milliseconds(), s.now())
+}
+
 // threadRoot returns the thread root id for a post: its RootId, or its own Id
 // when the post is itself a thread root (RootId == ""). Storing root_id this way
 // lets a single `WHERE root_id = ?` bump an entire thread.

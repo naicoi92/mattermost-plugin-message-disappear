@@ -30,6 +30,9 @@ var (
 type Service struct {
 	store TTLSettingStore
 	perm  PermissionChecker
+	// OnTTLChanged, if set, fires after a TTL is successfully set, with the
+	// channel id and duration. The plugin uses it to backfill existing posts.
+	OnTTLChanged func(channelID string, d time.Duration)
 }
 
 // NewService wires a TTL service with its persistence and permission ports.
@@ -48,11 +51,17 @@ func (s *Service) SetTTL(ctx context.Context, actorID, channelID string, d time.
 	if err := s.checkCanManage(actorID, channelID); err != nil {
 		return err
 	}
-	return s.store.Set(channelID, TTLSetting{
+	if err := s.store.Set(channelID, TTLSetting{
 		DurationSeconds: int64(d.Seconds()),
 		SetBy:           actorID,
 		SetAt:           setAt.UnixMilli(),
-	})
+	}); err != nil {
+		return err
+	}
+	if s.OnTTLChanged != nil {
+		s.OnTTLChanged(channelID, d)
+	}
+	return nil
 }
 
 // GetTTL returns the channel's TTL and whether one is set. Unset channels

@@ -138,3 +138,51 @@ func TestStoreDeleteByPostIDsBatch(t *testing.T) {
 	// Empty batch is a no-op (no error).
 	require.NoError(t, store.DeleteByPostIDs(ctx, nil))
 }
+
+// BackfillChannel indexes existing posts so they age out after a TTL is set.
+// Threads are grouped: every post in a thread gets the thread's newest CreateAt
+// + TTL, so a thread is purged as a unit once its newest message ages past TTL.
+func TestStoreBackfillChannelThreadGrouped(t *testing.T) {
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	store := NewSQLStore(db, "sqlite")
+	require.NoError(t, store.Migrate(context.Background()))
+
+	// Mimic the Mattermost posts schema (lowercase columns).
+	_, err = db.Exec(`CREATE TABLE posts (id TEXT, createat INTEGER, channelid TEXT, rootid TEXT, deleteat INTEGER)`)
+	require.NoError(t, err)
+
+	now := int64(1_000_000_000) // 1e9 ms
+	ttlMs := int64(5 * 60 * 1000)
+	insert := func(id, ch, root string, createAt int64) {
+		_, e := db.Exec(`INSERT INTO posts (id, createat, channelid, rootid, deleteat) VALUES (?, ?, ?, ?, 0)`, id, createAt, ch, root)
+		require.NoError(t, e)
+	}
+	// Thread: root 10m old, reply 1m old -> whole thread expires at reply.createat + ttl.
+	insert("r1", "c1", "", now-10*60*1000)
+	insert("a1", "c1", "r1", now-60*1000)
+	// Standalone 10m old -> expires at own createat + ttl (already past).
+	insert("solo", "c1", "", now-10*60*1000)
+	// Other channel: must stay untouched.
+	insert("x", "c2", "", now-10*60*1000)
+
+	require.NoError(t, store.BackfillChannel(context.Background(), "c1", ttlMs, now))
+
+	wantThread := (now - 60*1000) + ttlMs
+	for _, id := range []string{"r1", "a1"} {
+		got, e := store.GetByPostID(context.Background(), id)
+		require.NoError(t, e)
+		require.NotNil(t, got)
+		assert.Equalf(t, wantThread, got.ExpireAt, "%s must expire with the thread's newest message", id)
+	}
+	solo, e := store.GetByPostID(context.Background(), "solo")
+	require.NoError(t, e)
+	require.NotNil(t, solo)
+	assert.Equal(t, (now-10*60*1000)+ttlMs, solo.ExpireAt, "standalone post expires at own createat + ttl")
+
+	none, e := store.GetByPostID(context.Background(), "x")
+	require.NoError(t, e)
+	assert.Nil(t, none, "posts in other channels must not be indexed")
+}

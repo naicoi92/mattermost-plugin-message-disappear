@@ -37,6 +37,10 @@ type ExpireIndexStore interface {
 	DeleteByPostID(ctx context.Context, postID string) error
 	// DeleteByPostIDs removes rows for the given posts (after a purge batch).
 	DeleteByPostIDs(ctx context.Context, postIDs []string) error
+	// BackfillChannel indexes every live post in a channel (thread-grouped: each
+	// post's expire_at is its thread's newest CreateAt + ttlMs), so existing
+	// messages age out after a TTL is set — not only messages posted afterwards.
+	BackfillChannel(ctx context.Context, channelID string, ttlMs, nowMs int64) error
 }
 
 // NewSQLStore wraps a Mattermost master DB handle as an ExpireIndexStore.
@@ -147,6 +151,40 @@ func (s *sqlStore) DeleteByPostIDs(ctx context.Context, postIDs []string) error 
 	ph, args := inClause(postIDs)
 	if _, err := s.db.ExecContext(ctx, sqlutil.Rebind(s.driver, "DELETE FROM mpmd_expire WHERE post_id IN "+ph), args...); err != nil {
 		return fmt.Errorf("expire: delete batch: %w", err)
+	}
+	return nil
+}
+
+// backfillChannelSQL indexes every live post of a channel in one statement.
+// Each post's expire_at is its thread's newest CreateAt + ttlMs, so a thread is
+// purged as a unit only once every message has aged past the TTL. The posts
+// columns (id/createat/channelid/rootid/deleteat) are the Mattermost DB schema.
+const backfillChannelSQL = `
+INSERT INTO mpmd_expire (post_id, channel_id, root_id, expire_at, created_at)
+SELECT
+    p.id,
+    p.channelid,
+    COALESCE(NULLIF(p.rootid, ''), p.id),
+    tm.maxcreate + ?,
+    ?
+FROM posts p
+JOIN (
+    SELECT COALESCE(NULLIF(rootid, ''), id) AS rid, MAX(createat) AS maxcreate
+    FROM posts
+    WHERE channelid = ? AND deleteat = 0
+    GROUP BY rid
+) tm ON COALESCE(NULLIF(p.rootid, ''), p.id) = tm.rid
+WHERE p.channelid = ? AND p.deleteat = 0
+ON CONFLICT(post_id) DO UPDATE SET
+    expire_at  = excluded.expire_at,
+    channel_id = excluded.channel_id,
+    root_id    = excluded.root_id;
+`
+
+// BackfillChannel indexes existing posts so they age out after a TTL is set.
+func (s *sqlStore) BackfillChannel(ctx context.Context, channelID string, ttlMs, nowMs int64) error {
+	if _, err := s.db.ExecContext(ctx, sqlutil.Rebind(s.driver, backfillChannelSQL), ttlMs, nowMs, channelID, channelID); err != nil {
+		return fmt.Errorf("expire: backfill %q: %w", channelID, err)
 	}
 	return nil
 }

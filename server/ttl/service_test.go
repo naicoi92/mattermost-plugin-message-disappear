@@ -275,3 +275,30 @@ func TestGetSetting(t *testing.T) {
 	assert.Equal(t, int64(3600), got.DurationSeconds)
 	assert.Equal(t, "u1", got.SetBy)
 }
+
+func TestSetTTLFiresOnTTLChanged(t *testing.T) {
+	var got struct {
+		ch string
+		d  time.Duration
+	}
+	perm := &fakePerm{sysadmin: true, channel: &model.Channel{Type: model.ChannelTypeOpen}}
+	svc := NewService(newTestStore(t), perm)
+	svc.OnTTLChanged = func(channelID string, d time.Duration) {
+		got.ch = channelID
+		got.d = d
+	}
+	require.NoError(t, svc.SetTTL(context.Background(), "u1", "ch9", time.Hour, time.UnixMilli(1)))
+	assert.Equal(t, "ch9", got.ch)
+	assert.Equal(t, time.Hour, got.d)
+}
+
+// OnTTLChanged must NOT fire when the set fails (e.g. denied).
+func TestSetTTLDoesNotFireOnTTLChangedWhenDenied(t *testing.T) {
+	perm := &fakePerm{channel: &model.Channel{Type: model.ChannelTypeOpen}} // regular member -> denied
+	svc := NewService(newTestStore(t), perm)
+	fired := false
+	svc.OnTTLChanged = func(string, time.Duration) { fired = true }
+	err := svc.SetTTL(context.Background(), "u1", "ch9", time.Hour, time.UnixMilli(1))
+	assert.ErrorIs(t, err, ErrForbidden)
+	assert.False(t, fired, "hook must not fire on a denied set")
+}

@@ -2,8 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- **Backfill post cũ khi set TTL.** Trước đây chỉ post tạo SAU khi set TTL mới được index → message cũ không bao giờ bị xóa. Giờ khi set TTL, plugin index toàn bộ post hiện có trong channel (async, background) với expire_at = (newest CreateAt của thread) + TTL → thread bị xóa như một unit khi TẤT CẢ message đều già hơn TTL. Message cũ (đã quá TTL) bị xóa ở sweep kế tiếp (≤60s).
+
 ### Fixed
 
+- **Hard purge fail trên Postgres (`pq: syntax error at or near ","`).** `purge` package xóa post bằng `DELETE ... IN (?, ?)` không rebind → cùng bug placeholder `?` (JSONB operator) như expire/TTL store. Đã thêm `sqlutil.Rebind` cho purge (chỗ thứ 3). Trước fix, sweeper tìm thấy post expired nhưng purge txn fail → không xóa được gì.
 - **Sweeper + TTL store fail trên Postgres (`pq: syntax error at or near "ORDER"`).** Các SQL query dùng placeholder `?` — nhưng lib/pq coi `?` là JSONB operator nên parser lỗi (đây là lý do auto-delete chưa bao giờ chạy được trên Postgres). Thêm `sqlutil.Rebind`: chuyển `?`→`$N` cho postgres (driver lấy từ server config), giữ `?` cho sqlite/mysql. Áp dụng cho cả expire-index store và TTL store.
 - **Disappearing messages were never purged when `EnablePurge` was on with an empty/unmatched `PurgeSchemaAllowlist`.** The schema guard returned a fail-safe *skip*, making "enable purge" a silent no-op (messages never cleaned) — worse than the default. The guard now falls back to **soft-delete** (MM `DeletePost`), which is schema-agnostic and always safe. Hard purge still runs when the version is allowlisted; to get hard (no-trace) deletion set `PurgeSchemaAllowlist` to your server version prefix (e.g. `10.`).
 - **`RPC call to KVSetWithOptions API failed: connection is shut down` spam + `OnDeactivate` hang.** The sweeper ran via `cluster.Schedule`, whose KV-mutex pinger (`Lock` over an uncancellable context) spun forever once the plugin's RPC connection shut down — flooding the log and blocking deactivation until Mattermost force-killed the plugin. Replaced with a `time.Ticker` goroutine driven by a context cancelled in `OnDeactivate`: clean, prompt shutdown, no KV spam. Trade-off: drops cluster-wide single-execution (purge is idempotent, so concurrent nodes sweeping is safe — worst case redundant deletes).

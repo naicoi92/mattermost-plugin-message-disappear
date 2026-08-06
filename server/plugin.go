@@ -97,6 +97,9 @@ func (p *Plugin) wirePersistence(ctx context.Context, db *sql.DB, driver string)
 		return fmt.Errorf("disappear: expire index migrate: %w", err)
 	}
 	p.expiryService = expiry.NewService(p.expireStore, p.ttlService)
+	// Backfill existing posts whenever a TTL is set, so messages that predate
+	// the TTL age out too (not only messages posted afterwards).
+	p.ttlService.OnTTLChanged = p.onTTLChanged
 	p.purger = purge.NewSQLPurger(db, driver)
 
 	// The sweeper runs only against a real server (Driver set). Tests inject a
@@ -115,6 +118,23 @@ func (p *Plugin) masterDriver() string {
 		return *cfg.SqlSettings.DriverName
 	}
 	return "postgres"
+}
+
+// onTTLChanged runs when a TTL is set: it backfills the channel's existing
+// posts so they age out (not only messages posted afterwards). Best-effort and
+// async — SetTTL returns immediately; the backfill indexes posts in the
+// background and the next sweeper tick purges any already past their expiry.
+func (p *Plugin) onTTLChanged(channelID string, d time.Duration) {
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		start := time.Now()
+		if err := p.expiryService.BackfillChannel(ctx, channelID); err != nil {
+			p.API.LogError("disappear: backfill failed", "channel_id", channelID, "err", err)
+			return
+		}
+		p.API.LogInfo("disappear: backfill indexed existing posts", "channel_id", channelID, "ttl", d.String(), "elapsed_ms", time.Since(start).Milliseconds())
+	}()
 }
 
 // initSweeper starts the background sweeper on a fixed interval.

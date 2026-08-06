@@ -58,6 +58,7 @@ func (f *fakeStore) GetByPostID(_ context.Context, postID string) (*Entry, error
 func (f *fakeStore) GetExpired(context.Context, int64, int) ([]Entry, error) { return nil, nil }
 func (f *fakeStore) DeleteByPostID(context.Context, string) error            { return nil }
 func (f *fakeStore) DeleteByPostIDs(context.Context, []string) error         { return nil }
+func (f *fakeStore) BackfillChannel(context.Context, string, int64, int64) error { return nil }
 
 type fakeTTL struct {
 	d   time.Duration
