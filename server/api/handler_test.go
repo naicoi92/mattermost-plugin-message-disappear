@@ -116,6 +116,30 @@ func TestPostTTLValid(t *testing.T) {
 	assert.NotNil(t, ev.payload["ttl"])
 }
 
+// The ttl_changed WebSocket payload must carry a plain map, not the ttlDTO
+// struct: PublishWebSocketEvent crosses the go-plugin gob boundary, where an
+// unexported struct type is not registered ("gob: type not registered for
+// interface: api.ttlDTO").
+func TestBroadcastTTLIsGobSafeMap(t *testing.T) {
+	mgr, ws := newFakeTTL(), &fakeBroadcaster{}
+	h := New(mgr, ws)
+
+	body := strings.NewReader(`{"channel_id":"ch1","ttl_seconds":3600}`)
+	r := httptest.NewRequest(http.MethodPost, "/ttl", body)
+	r.Header.Set("Mattermost-User-ID", "u1")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	require.Equal(t, http.StatusCreated, w.Code)
+
+	ev := ws.last()
+	require.NotNil(t, ev)
+	ttl, ok := ev.payload["ttl"].(map[string]any)
+	require.Truef(t, ok, "ttl payload must be a gob-safe map, got %T", ev.payload["ttl"])
+	assert.Equal(t, int64(3600), ttl["duration"])
+	assert.Equal(t, "u1", ttl["set_by"])
+	assert.Contains(t, ttl, "set_at")
+}
+
 func TestPostTTLNoAuth(t *testing.T) {
 	h := New(newFakeTTL(), &fakeBroadcaster{})
 	r := httptest.NewRequest(http.MethodPost, "/ttl", strings.NewReader(`{}`))
