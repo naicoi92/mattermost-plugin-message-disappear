@@ -5,7 +5,7 @@ Brings Enterprise-grade **hard-delete message retention** to the Mattermost
 **purged from the database** — not merely soft-deleted.
 
 > ⚠️ **Hard delete via direct DB purge.** This plugin deletes posts, file info,
-> reactions and mentions from the Mattermost database via a transactional
+> reactions and thread rows from the Mattermost database via a transactional
 > `DELETE`. This is unsupported by the Mattermost plugin API and is
 > schema-dependent. Back up your database and review the design notes before
 > enabling in production. See `min_server_version` and the risk register in the

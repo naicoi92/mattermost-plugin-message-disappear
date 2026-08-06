@@ -38,9 +38,9 @@ func TestIntegrationSweepPurgeFromPosts(t *testing.T) {
 	require.NoError(t, ttlStore.Migrate(ctx))
 	for _, ddl := range []string{
 		`CREATE TABLE posts (id TEXT, createat INTEGER, channelid TEXT, rootid TEXT, deleteat INTEGER)`,
-		`CREATE TABLE fileinfo (post_id TEXT)`,
-		`CREATE TABLE reactions (post_id TEXT)`,
-		`CREATE TABLE mentions (post_id TEXT)`,
+		`CREATE TABLE fileinfo (postid TEXT)`,
+		`CREATE TABLE reactions (postid TEXT)`,
+		`CREATE TABLE threads (postid TEXT)`,
 		`CREATE TABLE preferences (userid TEXT, category TEXT, name TEXT, value TEXT)`,
 	} {
 		_, err := db.Exec(ddl)
@@ -55,8 +55,8 @@ func TestIntegrationSweepPurgeFromPosts(t *testing.T) {
 	insertPost := func(id string, createAt int64) {
 		_, e := db.Exec(`INSERT INTO posts (id, createat, channelid, rootid, deleteat) VALUES (?, ?, 'c1', '', 0)`, id, createAt)
 		require.NoError(t, e)
-		for _, tab := range []string{"fileinfo", "reactions", "mentions"} {
-			_, e := db.Exec(`INSERT INTO `+tab+` (post_id) VALUES (?)`, id)
+		for _, tab := range []string{"fileinfo", "reactions", "threads"} {
+			_, e := db.Exec(`INSERT INTO `+tab+` (postid) VALUES (?)`, id)
 			require.NoError(t, e)
 		}
 	}
@@ -75,7 +75,7 @@ func TestIntegrationSweepPurgeFromPosts(t *testing.T) {
 		require.NoError(t, db.QueryRow(`SELECT COUNT(*) FROM `+table+` WHERE `+col+` = ?`, id).Scan(&n))
 		return n
 	}
-	for _, f := range []struct{ table, col string }{{"posts", "id"}, {"fileinfo", "post_id"}, {"reactions", "post_id"}, {"mentions", "post_id"}} {
+	for _, f := range []struct{ table, col string }{{"posts", "id"}, {"fileinfo", "postid"}, {"reactions", "postid"}, {"threads", "postid"}} {
 		assert.Equalf(t, 0, count(f.table, f.col, "gone"), "aged post hard-deleted from %s", f.table)
 	}
 	assert.Equal(t, 1, count("posts", "id", "kept"), "not-yet-aged post survives")

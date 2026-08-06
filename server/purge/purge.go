@@ -25,25 +25,26 @@ type Purger interface {
 }
 
 // footprint lists (table, post-id column) pairs purged together with each post.
-// posts is keyed by its own id; the rest reference the post id.
+// posts is keyed by its own id; the rest reference the post id. Column names are
+// the Mattermost DB schema (lowercase, no underscore: "postid"), verified against
+// the MM v10 schema. There is NO "mentions" table (mentions are derived from the
+// message text, so deleting the post removes them); threads.postid is cleaned so
+// a hard-deleted thread leaves no ghost thread row.
 //
-// IMPORTANT (D10 risk): these names are the Mattermost DB schema. They must be
-// verified against the target MM version's schema at deployment (see design
-// doc 05 §3 "Verify tại impl"). Centralised here so a schema change is a
-// one-line fix.
+// IMPORTANT (D10 risk): these names are schema-dependent. Verify against the
+// target MM version before enabling hard purge (PurgeSchemaAllowlist).
 //
-// Scope: this deletes the DB ROWS only. The Mattermost plugin API exposes no
-// file-delete capability, so the underlying attachment BLOBS (disk/object storage)
-// are NOT removed — the fileinfo metadata row is, but the blob becomes orphaned.
-// See the README "Known limitations".
+// Scope: this deletes the DB ROWS only. The plugin API exposes no file-delete
+// capability, so attachment BLOBS (disk/object storage) are NOT removed — the
+// fileinfo metadata row is, but the blob becomes orphaned. See README.
 var footprint = []struct {
 	table string
 	col   string
 }{
 	{"posts", "id"},
-	{"fileinfo", "post_id"},
-	{"reactions", "post_id"},
-	{"mentions", "post_id"},
+	{"fileinfo", "postid"},
+	{"reactions", "postid"},
+	{"threads", "postid"},
 }
 
 // NewSQLPurger wraps a Mattermost master DB handle as a Purger. driver rebinds

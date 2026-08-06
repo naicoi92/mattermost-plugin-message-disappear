@@ -19,9 +19,9 @@ func setupFootprintDB(t *testing.T) *sql.DB {
 	t.Cleanup(func() { _ = db.Close() })
 	for _, ddl := range []string{
 		`CREATE TABLE posts (id TEXT PRIMARY KEY)`,
-		`CREATE TABLE fileinfo (post_id TEXT)`,
-		`CREATE TABLE reactions (post_id TEXT)`,
-		`CREATE TABLE mentions (post_id TEXT)`,
+		`CREATE TABLE fileinfo (postid TEXT)`,
+		`CREATE TABLE reactions (postid TEXT)`,
+		`CREATE TABLE threads (postid TEXT)`,
 	} {
 		_, err := db.Exec(ddl)
 		require.NoError(t, err)
@@ -34,9 +34,9 @@ func seed(t *testing.T, db *sql.DB, postID string) {
 	t.Helper()
 	for _, q := range []string{
 		`INSERT INTO posts (id) VALUES (?)`,
-		`INSERT INTO fileinfo (post_id) VALUES (?)`,
-		`INSERT INTO reactions (post_id) VALUES (?)`,
-		`INSERT INTO mentions (post_id) VALUES (?)`,
+		`INSERT INTO fileinfo (postid) VALUES (?)`,
+		`INSERT INTO reactions (postid) VALUES (?)`,
+		`INSERT INTO threads (postid) VALUES (?)`,
 	} {
 		_, err := db.Exec(q, postID)
 		require.NoError(t, err)
