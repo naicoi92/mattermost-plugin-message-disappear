@@ -1,8 +1,8 @@
 package api
 
 import (
-	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -16,6 +16,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/ttl"
+
+	_ "modernc.org/sqlite" // pure-Go sqlite driver for the end-to-end store
 )
 
 // Compile-time: the real ttl.Service satisfies the TTLManager port the API depends on.
@@ -122,19 +124,18 @@ func TestPostTTLNoAuth(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, w.Code)
 }
 
-// stubKV + stubPerm drive the REAL ttl.Service end-to-end through HTTP, so the
-// handler's status mapping is verified against genuine validation/permission.
-type stubKV struct{ data map[string][]byte }
-
-func (s *stubKV) KVGet(k string) ([]byte, *model.AppError) { return bytes.Clone(s.data[k]), nil }
-func (s *stubKV) KVSetWithOptions(k string, v []byte, opts model.PluginKVSetOptions) (bool, *model.AppError) {
-	if opts.Atomic && !bytes.Equal(s.data[k], opts.OldValue) {
-		return false, nil
-	}
-	s.data[k] = bytes.Clone(v)
-	return true, nil
+// newSQLStore + stubPerm drive the REAL ttl.Service end-to-end through HTTP, so
+// the handler's status mapping is verified against genuine validation/permission.
+func newSQLStore(t *testing.T) ttl.TTLSettingStore {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	store := ttl.NewSQLStore(db, "sqlite")
+	require.NoError(t, store.Migrate(context.Background()))
+	return store
 }
-func (s *stubKV) KVDelete(k string) *model.AppError { delete(s.data, k); return nil }
 
 type stubPerm struct{ channel *model.Channel }
 
@@ -148,8 +149,7 @@ func (stubPerm) GetChannelMember(string, string) (*model.ChannelMember, *model.A
 func (stubPerm) LogError(_ string, _ ...any) {}
 
 func TestPostTTLEndToEndValidationAndPermission(t *testing.T) {
-	kv := &stubKV{data: map[string][]byte{}}
-	svc := ttl.NewService(ttl.NewKVStore(kv), stubPerm{channel: &model.Channel{Type: model.ChannelTypeOpen}})
+	svc := ttl.NewService(newSQLStore(t), stubPerm{channel: &model.Channel{Type: model.ChannelTypeOpen}})
 	h := New(svc, &fakeBroadcaster{})
 
 	// invalid range (< 1m) -> 400 via real validation
@@ -316,17 +316,6 @@ func TestPostTTLMapsNotFound(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 	assert.Equal(t, http.StatusNotFound, w.Code)
-}
-
-func TestPostTTLMapsConflict(t *testing.T) {
-	mgr := newFakeTTL()
-	mgr.setErr = ttl.ErrTooManyRetries
-	h := New(mgr, &fakeBroadcaster{})
-	r := httptest.NewRequest(http.MethodPost, "/ttl", strings.NewReader(`{"channel_id":"ch1","ttl_seconds":3600}`))
-	r.Header.Set("Mattermost-User-ID", "u1")
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	assert.Equal(t, http.StatusConflict, w.Code)
 }
 
 func TestGetTTLMapsError(t *testing.T) {

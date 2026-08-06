@@ -163,8 +163,6 @@ func writeDomainError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusForbidden, err.Error())
 	case errors.Is(err, ttl.ErrChannelNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, ttl.ErrTooManyRetries):
-		writeError(w, http.StatusConflict, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	}

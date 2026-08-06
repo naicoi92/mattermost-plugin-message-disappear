@@ -8,6 +8,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/naicoi92/mattermost-plugin-message-disappear/server/sqlutil"
 )
 
 // Entry is a row in the mpmd_expire index.
@@ -38,12 +40,15 @@ type ExpireIndexStore interface {
 }
 
 // NewSQLStore wraps a Mattermost master DB handle as an ExpireIndexStore.
-func NewSQLStore(db *sql.DB) ExpireIndexStore {
-	return &sqlStore{db: db}
+// driver is the Mattermost SQL driver name ("postgres"/"mysql"/…), used to
+// rebind "?" placeholders to the driver's native form (postgres needs $N).
+func NewSQLStore(db *sql.DB, driver string) ExpireIndexStore {
+	return &sqlStore{db: db, driver: driver}
 }
 
 type sqlStore struct {
-	db *sql.DB
+	db     *sql.DB
+	driver string
 }
 
 // DDL is portable across postgres and sqlite (MM v10+ is postgres-focused).
@@ -76,7 +81,7 @@ ON CONFLICT(post_id) DO UPDATE SET
 `
 
 func (s *sqlStore) Upsert(ctx context.Context, e Entry) error {
-	if _, err := s.db.ExecContext(ctx, upsertSQL, e.PostID, e.ChannelID, e.RootID, e.ExpireAt, e.CreatedAt); err != nil {
+	if _, err := s.db.ExecContext(ctx, sqlutil.Rebind(s.driver, upsertSQL), e.PostID, e.ChannelID, e.RootID, e.ExpireAt, e.CreatedAt); err != nil {
 		return fmt.Errorf("expire: upsert %q: %w", e.PostID, err)
 	}
 	return nil
@@ -85,7 +90,7 @@ func (s *sqlStore) Upsert(ctx context.Context, e Entry) error {
 const updateByRootSQL = `UPDATE mpmd_expire SET expire_at = ? WHERE root_id = ?;`
 
 func (s *sqlStore) UpdateExpireByRoot(ctx context.Context, rootID string, expireAtMs int64) error {
-	if _, err := s.db.ExecContext(ctx, updateByRootSQL, expireAtMs, rootID); err != nil {
+	if _, err := s.db.ExecContext(ctx, sqlutil.Rebind(s.driver, updateByRootSQL), expireAtMs, rootID); err != nil {
 		return fmt.Errorf("expire: bump thread %q: %w", rootID, err)
 	}
 	return nil
@@ -94,7 +99,7 @@ func (s *sqlStore) UpdateExpireByRoot(ctx context.Context, rootID string, expire
 const getByPostSQL = `SELECT post_id, channel_id, root_id, expire_at, created_at FROM mpmd_expire WHERE post_id = ?;`
 
 func (s *sqlStore) GetByPostID(ctx context.Context, postID string) (*Entry, error) {
-	row := s.db.QueryRowContext(ctx, getByPostSQL, postID)
+	row := s.db.QueryRowContext(ctx, sqlutil.Rebind(s.driver, getByPostSQL), postID)
 	var e Entry
 	err := row.Scan(&e.PostID, &e.ChannelID, &e.RootID, &e.ExpireAt, &e.CreatedAt)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -109,7 +114,7 @@ func (s *sqlStore) GetByPostID(ctx context.Context, postID string) (*Entry, erro
 const getExpiredSQL = `SELECT post_id, channel_id, root_id, expire_at, created_at FROM mpmd_expire WHERE expire_at <= ? ORDER BY expire_at LIMIT ?;`
 
 func (s *sqlStore) GetExpired(ctx context.Context, nowMs int64, limit int) ([]Entry, error) {
-	rows, err := s.db.QueryContext(ctx, getExpiredSQL, nowMs, limit)
+	rows, err := s.db.QueryContext(ctx, sqlutil.Rebind(s.driver, getExpiredSQL), nowMs, limit)
 	if err != nil {
 		return nil, fmt.Errorf("expire: query expired: %w", err)
 	}
@@ -129,7 +134,7 @@ func (s *sqlStore) GetExpired(ctx context.Context, nowMs int64, limit int) ([]En
 const deleteByPostSQL = `DELETE FROM mpmd_expire WHERE post_id = ?;`
 
 func (s *sqlStore) DeleteByPostID(ctx context.Context, postID string) error {
-	if _, err := s.db.ExecContext(ctx, deleteByPostSQL, postID); err != nil {
+	if _, err := s.db.ExecContext(ctx, sqlutil.Rebind(s.driver, deleteByPostSQL), postID); err != nil {
 		return fmt.Errorf("expire: delete %q: %w", postID, err)
 	}
 	return nil
@@ -140,7 +145,7 @@ func (s *sqlStore) DeleteByPostIDs(ctx context.Context, postIDs []string) error 
 		return nil
 	}
 	ph, args := inClause(postIDs)
-	if _, err := s.db.ExecContext(ctx, "DELETE FROM mpmd_expire WHERE post_id IN "+ph, args...); err != nil {
+	if _, err := s.db.ExecContext(ctx, sqlutil.Rebind(s.driver, "DELETE FROM mpmd_expire WHERE post_id IN "+ph), args...); err != nil {
 		return fmt.Errorf("expire: delete batch: %w", err)
 	}
 	return nil

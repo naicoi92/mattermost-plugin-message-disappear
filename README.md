@@ -13,7 +13,7 @@ Brings Enterprise-grade **hard-delete message retention** to the Mattermost
 
 ## Status
 
-**v1.0.0** — full lifecycle: per-channel TTL (KV + presets + permission), HTTP API +
+**v1.0.0** — full lifecycle: per-channel TTL (SQL + presets + permission), HTTP API +
 `/disappear` slash command, webapp badge + selector modal, expire index (SQL),
 background sweeper, a **transactional hard purge** gated by a schema-version
 guard (`PurgeSchemaAllowlist`) with a soft-delete fallback (off, Enterprise, or

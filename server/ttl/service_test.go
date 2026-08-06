@@ -1,8 +1,8 @@
 package ttl
 
 import (
-	"bytes"
 	"context"
+	"database/sql"
 	"sync"
 	"testing"
 	"time"
@@ -11,50 +11,24 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	_ "modernc.org/sqlite" // pure-Go sqlite driver for the in-memory store tests
 )
 
-// --- fakes ---
-
-// fakeKV is an in-memory, mutex-guarded KV implementing the CAS semantics of
-// the Mattermost plugin KV store.
-type fakeKV struct {
-	mu   sync.Mutex
-	data map[string][]byte
+// newTestStore returns an in-memory sqlite-backed TTL store with the schema
+// migrated. A single connection (SetMaxOpenConns(1)) shares the :memory:
+// database across every query on the handle, which the concurrent-set test
+// relies on (each :memory: connection is otherwise a fresh database).
+func newTestStore(t *testing.T) TTLSettingStore {
+	t.Helper()
+	db, err := sql.Open("sqlite", ":memory:")
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	store := NewSQLStore(db, "sqlite")
+	require.NoError(t, store.Migrate(context.Background()))
+	return store
 }
-
-func newFakeKV() *fakeKV { return &fakeKV{data: map[string][]byte{}} }
-
-func (f *fakeKV) KVGet(key string) ([]byte, *model.AppError) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return bytes.Clone(f.data[key]), nil
-}
-
-func (f *fakeKV) KVSetWithOptions(key string, value []byte, opts model.PluginKVSetOptions) (bool, *model.AppError) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if opts.Atomic && !bytes.Equal(f.data[key], opts.OldValue) {
-		return false, nil // conflict
-	}
-	f.data[key] = bytes.Clone(value)
-	return true, nil
-}
-
-func (f *fakeKV) KVDelete(key string) *model.AppError {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	delete(f.data, key)
-	return nil
-}
-
-// conflictKV always reports a CAS conflict, forcing the retry loop to exhaust.
-type conflictKV struct{}
-
-func (conflictKV) KVGet(string) ([]byte, *model.AppError) { return nil, nil }
-func (conflictKV) KVSetWithOptions(string, []byte, model.PluginKVSetOptions) (bool, *model.AppError) {
-	return false, nil
-}
-func (conflictKV) KVDelete(string) *model.AppError { return nil }
 
 // fakePerm is a programmable PermissionChecker for the membership policy tests.
 type fakePerm struct {
@@ -125,18 +99,43 @@ func TestPresetForLabel(t *testing.T) {
 	assert.False(t, ok)
 }
 
-// --- store: default OFF + atomic concurrent set ---
+// --- store: default OFF + atomic upsert ---
 
 func TestGetUnsetReturnsDefaultOFF(t *testing.T) {
-	got, err := NewKVStore(newFakeKV()).Get("ch1")
+	got, err := newTestStore(t).Get("ch1")
 	require.NoError(t, err)
 	assert.Nil(t, got, "unset channel must read as default OFF")
 }
 
-// Distinct concurrent writes must serialise: the store ends with exactly one
-// coherent value, drawn from the set of legitimate inputs (no torn write).
-func TestKVStoreConcurrentDistinctSetSerializes(t *testing.T) {
-	store := NewKVStore(newFakeKV())
+func TestStoreSetGetClearRoundtrip(t *testing.T) {
+	store := newTestStore(t)
+
+	require.NoError(t, store.Set("ch1", TTLSetting{DurationSeconds: 3600, SetBy: "u", SetAt: 1}))
+	got, err := store.Get("ch1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, int64(3600), got.DurationSeconds)
+	assert.Equal(t, "u", got.SetBy)
+
+	// upsert overwrites in place
+	require.NoError(t, store.Set("ch1", TTLSetting{DurationSeconds: 60, SetBy: "u2", SetAt: 2}))
+	got, err = store.Get("ch1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, int64(60), got.DurationSeconds, "upsert must replace the existing row")
+	assert.Equal(t, "u2", got.SetBy)
+
+	require.NoError(t, store.Clear("ch1"))
+	got, err = store.Get("ch1")
+	require.NoError(t, err)
+	assert.Nil(t, got, "clear must return default OFF")
+}
+
+// Distinct concurrent writes must leave exactly one coherent value — no torn
+// write. The DB serialises the UPSERTs (single connection); the surviving row
+// is one of the legitimate inputs.
+func TestStoreConcurrentDistinctSetIsCoherent(t *testing.T) {
+	store := newTestStore(t)
 	const goroutines = 25
 	inputs := make(map[int64]struct{}, goroutines)
 	var wg sync.WaitGroup
@@ -158,42 +157,36 @@ func TestKVStoreConcurrentDistinctSetSerializes(t *testing.T) {
 	assert.Truef(t, ok, "surviving value must be one of the distinct inputs, got %d", got.DurationSeconds)
 }
 
-func TestKVStoreSetRetriesExhausted(t *testing.T) {
-	store := NewKVStore(conflictKV{})
-	err := store.Set("ch1", TTLSetting{DurationSeconds: 60, SetBy: "u", SetAt: 1})
-	assert.ErrorIs(t, err, ErrTooManyRetries)
-}
-
 // --- service: permission (D2) ---
 
 func TestSetTTLRejectsInvalidTTLBeforePermission(t *testing.T) {
 	// Regular member; validation (400) must fire before the permission (403) check.
-	svc := NewService(NewKVStore(newFakeKV()), &fakePerm{channel: &model.Channel{Type: model.ChannelTypeOpen}})
+	svc := NewService(newTestStore(t), &fakePerm{channel: &model.Channel{Type: model.ChannelTypeOpen}})
 	err := svc.SetTTL(context.Background(), "u1", "ch1", 30*time.Second, time.UnixMilli(1))
 	assert.ErrorIs(t, err, ErrInvalidTTL)
 }
 
 func TestSetTTLAllowsPublicChannelAdmin(t *testing.T) {
 	perm := &fakePerm{managePub: true, channel: &model.Channel{Type: model.ChannelTypeOpen}}
-	svc := NewService(NewKVStore(newFakeKV()), perm)
+	svc := NewService(newTestStore(t), perm)
 	require.NoError(t, svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1)))
 }
 
 func TestSetTTLAllowsPrivateChannelAdmin(t *testing.T) {
 	perm := &fakePerm{managePriv: true, channel: &model.Channel{Type: model.ChannelTypePrivate}}
-	svc := NewService(NewKVStore(newFakeKV()), perm)
+	svc := NewService(newTestStore(t), perm)
 	require.NoError(t, svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1)))
 }
 
 func TestSetTTLAllowsSysadmin(t *testing.T) {
 	perm := &fakePerm{sysadmin: true, channel: &model.Channel{Type: model.ChannelTypePrivate}}
-	svc := NewService(NewKVStore(newFakeKV()), perm)
+	svc := NewService(newTestStore(t), perm)
 	require.NoError(t, svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1)))
 }
 
 func TestSetTTLDeniesRegularMember(t *testing.T) {
 	perm := &fakePerm{channel: &model.Channel{Type: model.ChannelTypeOpen}}
-	svc := NewService(NewKVStore(newFakeKV()), perm)
+	svc := NewService(newTestStore(t), perm)
 	err := svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1))
 	assert.ErrorIs(t, err, ErrForbidden)
 }
@@ -201,21 +194,21 @@ func TestSetTTLDeniesRegularMember(t *testing.T) {
 func TestSetTTLAllowsChannelMember(t *testing.T) {
 	// Any channel member may set a TTL, even without channel-admin permissions.
 	perm := &fakePerm{member: &model.ChannelMember{}}
-	svc := NewService(NewKVStore(newFakeKV()), perm)
+	svc := NewService(newTestStore(t), perm)
 	require.NoError(t, svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1)))
 }
 
 func TestSetTTLDeniesNonMember(t *testing.T) {
 	// A user who is not a channel member (and holds no admin permission) is denied.
 	perm := &fakePerm{memberErr: &model.AppError{}}
-	svc := NewService(NewKVStore(newFakeKV()), perm)
+	svc := NewService(newTestStore(t), perm)
 	err := svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1))
 	assert.ErrorIs(t, err, ErrForbidden)
 }
 
 func TestClearTTLDeniesRegularMember(t *testing.T) {
 	perm := &fakePerm{channel: &model.Channel{Type: model.ChannelTypeOpen}}
-	svc := NewService(NewKVStore(newFakeKV()), perm)
+	svc := NewService(newTestStore(t), perm)
 	err := svc.ClearTTL(context.Background(), "u1", "ch1")
 	assert.ErrorIs(t, err, ErrForbidden)
 }
@@ -225,7 +218,7 @@ func TestClearTTLDeniesRegularMember(t *testing.T) {
 // channel-scoped permission, without relying on GetChannel.
 func TestSetTTLAllowsAdminWhenGetChannelReturnsNil(t *testing.T) {
 	perm := &fakePerm{managePub: true, channel: nil, channelErr: nil}
-	svc := NewService(NewKVStore(newFakeKV()), perm)
+	svc := NewService(newTestStore(t), perm)
 	require.NoError(t, svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1)))
 }
 
@@ -234,14 +227,14 @@ func TestSetTTLAllowsAdminWhenGetChannelReturnsNil(t *testing.T) {
 // GetChannel is broken).
 func TestSetTTLDeniesMemberWhenGetChannelReturnsNil(t *testing.T) {
 	perm := &fakePerm{channel: nil, channelErr: nil}
-	svc := NewService(NewKVStore(newFakeKV()), perm)
+	svc := NewService(newTestStore(t), perm)
 	err := svc.SetTTL(context.Background(), "u1", "ch1", time.Hour, time.UnixMilli(1))
 	assert.ErrorIs(t, err, ErrForbidden)
 }
 
 func TestGetTTLAndClearRoundtrip(t *testing.T) {
 	perm := &fakePerm{sysadmin: true, channel: &model.Channel{Type: model.ChannelTypeOpen}}
-	svc := NewService(NewKVStore(newFakeKV()), perm)
+	svc := NewService(newTestStore(t), perm)
 
 	// default OFF
 	d, ok, err := svc.GetTTL(context.Background(), "ch1")
@@ -266,7 +259,7 @@ func TestGetTTLAndClearRoundtrip(t *testing.T) {
 
 func TestGetSetting(t *testing.T) {
 	perm := &fakePerm{sysadmin: true, channel: &model.Channel{Type: model.ChannelTypeOpen}}
-	svc := NewService(NewKVStore(newFakeKV()), perm)
+	svc := NewService(newTestStore(t), perm)
 
 	// unset -> nil (default OFF)
 	got, err := svc.GetSetting(context.Background(), "ch1")

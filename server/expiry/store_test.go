@@ -17,7 +17,7 @@ func newTestStore(t *testing.T) ExpireIndexStore {
 	db, err := sql.Open("sqlite", ":memory:")
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	store := NewSQLStore(db)
+	store := NewSQLStore(db, "sqlite")
 	require.NoError(t, store.Migrate(context.Background()))
 	return store
 }
@@ -116,7 +116,7 @@ func TestStoreMigrateFailsOnClosedDB(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close()) // closed handle -> migrate errors
 
-	err = NewSQLStore(db).Migrate(context.Background())
+	err = NewSQLStore(db, "sqlite").Migrate(context.Background())
 	require.Error(t, err)
 }
 

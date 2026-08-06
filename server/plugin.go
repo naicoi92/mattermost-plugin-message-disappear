@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -26,7 +28,12 @@ const sweeperInterval = 60 * time.Second
 type Plugin struct {
 	plugin.MattermostPlugin
 
-	client        *pluginapi.Client
+	client *pluginapi.Client
+	// db + sqlDriver are injected by tests; production opens the master DB via
+	// pluginapi in OnActivate and reads the SQL driver from the server config.
+	// sqlDriver selects the placeholder style ("?" vs the postgres "$N" form).
+	db        *sql.DB
+	sqlDriver string
 	cfg           configHolder
 	ttlService    *ttl.Service
 	apiHandler    *api.Handler
@@ -38,46 +45,76 @@ type Plugin struct {
 }
 
 // OnActivate wires the TTL service, the HTTP/slash API surface, the /disappear
-// command, and — when DB access is available — the expire index + Purger + background sweeper.
+// command, and — backed by the master DB — the expire index, Purger and sweeper.
 func (p *Plugin) OnActivate() error {
 	p.API.LogInfo("Disappearing Messages plugin activated")
 	p.loadConfig()
 
 	p.client = pluginapi.NewClient(p.API, p.Driver)
-	p.ttlService = ttl.NewService(ttl.NewKVStore(p.API), p.API)
-	p.apiHandler = api.New(p.ttlService, p.API)
+
+	// The TTL store, expire index and Purger all persist in the Mattermost
+	// master DB (a single handle, shared). Plugin KV is intentionally not used:
+	// on Mattermost 10.x the plugin RPC shuts down during reload/deactivate and
+	// every KVSetWithOptions fails with "connection is shut down". Tests inject
+	// p.db; production opens it via pluginapi.
+	db := p.db
+	if db == nil {
+		var err error
+		db, err = p.client.Store.GetMasterDB()
+		if err != nil {
+			return fmt.Errorf("disappear: master DB unavailable: %w", err)
+		}
+	}
+	driver := p.sqlDriver
+	if driver == "" {
+		driver = p.masterDriver()
+	}
+	if err := p.wirePersistence(context.Background(), db, driver); err != nil {
+		return err
+	}
 
 	// Best-effort: a registration failure is logged but does not block activation.
 	if err := p.API.RegisterCommand(p.disappearCommand()); err != nil {
 		p.API.LogError("failed to register /disappear command", "err", err)
 	}
+	return nil
+}
 
-	// The expire index + Purger need the master DB; if unavailable, the plugin
-	// degrades gracefully — TTL set/view/off still work, only auto-delete is off.
+// wirePersistence migrates the TTL and expire-index tables and wires the TTL
+// service, expire index, transactional Purger, and (against a real server) the
+// background sweeper onto a single master DB handle. driver rebinds "?" to the
+// DB's native placeholder form.
+func (p *Plugin) wirePersistence(ctx context.Context, db *sql.DB, driver string) error {
+	ttlStore := ttl.NewSQLStore(db, driver)
+	if err := ttlStore.Migrate(ctx); err != nil {
+		return fmt.Errorf("disappear: TTL store migrate: %w", err)
+	}
+	p.ttlService = ttl.NewService(ttlStore, p.API)
+	p.apiHandler = api.New(p.ttlService, p.API)
+
+	p.expireStore = expiry.NewSQLStore(db, driver)
+	if err := p.expireStore.Migrate(ctx); err != nil {
+		return fmt.Errorf("disappear: expire index migrate: %w", err)
+	}
+	p.expiryService = expiry.NewService(p.expireStore, p.ttlService)
+	p.purger = purge.NewSQLPurger(db)
+
+	// The sweeper runs only against a real server (Driver set). Tests inject a
+	// DB but have no Driver, so they don't spawn the background goroutine.
 	if p.Driver != nil {
-		if err := p.initExpiry(context.Background()); err != nil {
-			p.API.LogError("disappear: expire index disabled", "err", err)
-		} else {
-			p.initSweeper()
-		}
+		p.initSweeper()
 	}
 	return nil
 }
 
-// initExpiry opens the master DB, migrates the expire-index table, and wires the
-// ExpiryService and the transactional Purger. Returns nil on success or an error.
-func (p *Plugin) initExpiry(ctx context.Context) error {
-	db, err := p.client.Store.GetMasterDB()
-	if err != nil {
-		return err
+// masterDriver returns the Mattermost SQL driver name, defaulting to "postgres"
+// (the MM v10 default and the target deployment) so "?" placeholders are
+// rebound to "$N" even if the config read fails.
+func (p *Plugin) masterDriver() string {
+	if cfg := p.API.GetConfig(); cfg != nil && cfg.SqlSettings.DriverName != nil {
+		return *cfg.SqlSettings.DriverName
 	}
-	p.expireStore = expiry.NewSQLStore(db)
-	if err := p.expireStore.Migrate(ctx); err != nil {
-		return err
-	}
-	p.expiryService = expiry.NewService(p.expireStore, p.ttlService)
-	p.purger = purge.NewSQLPurger(db)
-	return nil
+	return "postgres"
 }
 
 // initSweeper starts the background sweeper on a fixed interval.

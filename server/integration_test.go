@@ -38,7 +38,7 @@ func TestIntegrationExpireSweepPurge(t *testing.T) {
 	t.Cleanup(func() { _ = db.Close() })
 	ctx := context.Background()
 
-	store := expiry.NewSQLStore(db)
+	store := expiry.NewSQLStore(db, "sqlite")
 	require.NoError(t, store.Migrate(ctx))
 	for _, ddl := range []string{
 		`CREATE TABLE posts (id TEXT PRIMARY KEY)`,
