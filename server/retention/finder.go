@@ -29,6 +29,14 @@ func NewFinder(db *sql.DB, driver string) *Finder {
 	return &Finder{db: db, driver: driver}
 }
 
+// AgedPost is a post selected for purge: its id and raw root id ("" for a
+// thread root). The root id lets the caller emit a correct post_deleted event so
+// both channel and thread views clear in real time.
+type AgedPost struct {
+	PostID string
+	RootID string // raw posts.rootid ("" for a thread root)
+}
+
 // agedThreadsSQL returns the post ids of threads in a channel whose newest
 // message is older than the age threshold, EXCLUDING threads that contain a
 // saved (flagged) post. Columns (posts.id/createat/channelid/rootid/deleteat,
@@ -39,7 +47,7 @@ func NewFinder(db *sql.DB, driver string) *Finder {
 // MAX(createat) is the thread's newest message. Mattermost threads are flat
 // (reply-to-reply still points at the root), so this groups at any depth.
 const agedThreadsSQL = `
-SELECT p.id
+SELECT p.id, p.rootid
 FROM posts p
 JOIN (
     SELECT COALESCE(NULLIF(rootid, ''), id) AS rid, MAX(createat) AS mc
@@ -60,20 +68,20 @@ LIMIT ?
 // AgedThreads returns up to limit post ids in channelID whose thread's newest
 // message is older than thresholdMs (i.e. the whole thread has aged past the
 // TTL). Threads containing a saved post are protected and never returned.
-func (f *Finder) AgedThreads(ctx context.Context, channelID string, thresholdMs int64, limit int) ([]string, error) {
+func (f *Finder) AgedThreads(ctx context.Context, channelID string, thresholdMs int64, limit int) ([]AgedPost, error) {
 	rows, err := f.db.QueryContext(ctx, sqlutil.Rebind(f.driver, agedThreadsSQL), channelID, channelID, thresholdMs, limit)
 	if err != nil {
 		return nil, fmt.Errorf("retention: aged threads %q: %w", channelID, err)
 	}
 	defer func() { _ = rows.Close() }()
 
-	var out []string
+	var out []AgedPost
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var ap AgedPost
+		if err := rows.Scan(&ap.PostID, &ap.RootID); err != nil {
 			return nil, fmt.Errorf("retention: scan %q: %w", channelID, err)
 		}
-		out = append(out, id)
+		out = append(out, ap)
 	}
 	return out, rows.Err()
 }

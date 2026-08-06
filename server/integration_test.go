@@ -8,6 +8,7 @@ import (
 
 	_ "modernc.org/sqlite"
 
+	"github.com/mattermost/mattermost/server/public/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -17,11 +18,12 @@ import (
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/ttl"
 )
 
-// discardLogger is a no-op sweeper.Logger (test seam).
+// discardLogger is a no-op sweeper.API (test seam).
 type discardLogger struct{}
 
-func (discardLogger) LogInfo(string, ...any)  {}
-func (discardLogger) LogError(string, ...any) {}
+func (discardLogger) LogInfo(string, ...any)                                                  {}
+func (discardLogger) LogError(string, ...any)                                                 {}
+func (discardLogger) PublishWebSocketEvent(string, map[string]any, *model.WebsocketBroadcast) {}
 
 // TestIntegrationSweepPurgeFromPosts drives the full sweeper lifecycle against
 // an in-memory sqlite DB whose schema mimics Mattermost: posts older than the

@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Bảo vệ saved messages.** Post nào đã được user save (lưu trong bảng `preferences`, `category='flagged_post'`) → cả thread chứa nó được giữ, không bị xóa kể cả khi đã quá TTL. Vì mô hình thread-as-unit không thể xóa từng phần, một post saved bảo vệ cả thread.
+- **Purge hiện real-time trên webapp.** Hard-purge xóa DB rows nhưng KHÔNG emit `post_deleted` (chỉ MM `DeletePost` mới emit) → webapp vẫn hiện message cho đến khi reload. Giờ sweeper publish `post_deleted` (payload `data.post` JSON, mirror MM) cho mỗi post đã purge → channel/thread view dọn ngay không cần reload.
 
 ### Fixed
 
