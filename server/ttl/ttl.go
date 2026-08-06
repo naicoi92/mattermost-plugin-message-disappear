@@ -26,6 +26,7 @@ var Presets = []Preset{
 	{"8h", 8 * time.Hour},
 	{"1d", 24 * time.Hour},
 	{"1w", 7 * 24 * time.Hour},
+	{"1mo", 30 * 24 * time.Hour},
 }
 
 // ErrInvalidTTL is returned when a TTL falls outside [MinTTL, MaxTTL].
