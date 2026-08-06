@@ -138,6 +138,7 @@ func (p *Plugin) initSweeper(ttlSrc sweeper.TTLSource, finder sweeper.PostFinder
 // runSweeper drains the backlog once on activation, then sweeps on every
 // interval until ctx is cancelled by OnDeactivate.
 func (p *Plugin) runSweeper(ctx context.Context) {
+	p.API.LogInfo("disappear: sweeper started", "interval", sweeperInterval.String())
 	p.sweeper.Run() // sweep the backlog promptly on activation
 
 	ticker := time.NewTicker(sweeperInterval)
