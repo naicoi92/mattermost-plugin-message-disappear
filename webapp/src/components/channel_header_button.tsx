@@ -1,8 +1,10 @@
 import {useEffect, useRef, useState} from 'react';
+import {useSelector} from 'react-redux';
 
 import {useChannelTTL} from 'hooks/use_channel_ttl';
 import {clearTTL, setTTL} from 'client';
 import {PRESETS, shortDuration} from 'presets';
+import {GlobalState} from 'reducer';
 
 // ChannelHeaderButton is registered via registerChannelHeaderIcon (Mattermost
 // 11.5+). The webapp renders it in the channel header and passes the `channel`
@@ -14,7 +16,12 @@ import {PRESETS, shortDuration} from 'presets';
 // clicking opens a dropdown of presets + Off for fast setup. registerChannelHeaderIcon
 // has no action callback, so the click + dropdown live entirely in this component.
 export default function ChannelHeaderButton({channel}: {channel?: {id: string}}) {
-    const channelId = channel?.id ?? '';
+    // registerChannelHeaderIcon (MM 11.5+) is meant to pass `channel`, but not
+    // every host build does — fall back to the redux current channel id so the
+    // menu always acts on the channel the user is viewing (an empty id makes the
+    // server reject the set with 400, silently swallowed before this fix).
+    const currentChannelId = useSelector((state: GlobalState) => state.entities.channels.currentChannelId);
+    const channelId = channel?.id || currentChannelId || '';
     const ttl = useChannelTTL(channelId);
     const [open, setOpen] = useState(false);
     const rootRef = useRef<HTMLDivElement>(null);
@@ -44,10 +51,11 @@ export default function ChannelHeaderButton({channel}: {channel?: {id: string}})
         };
     }, [open]);
 
-    // Fire-and-forget a maybe-async action (setTTL/clearTTL return a promise; a
-    // failure is logged server-side and the ttl_changed WS keeps the store honest).
+    // Fire-and-forget; surface failures to the console so a rejected set is
+    // visible (previously swallowed). The ttl_changed WS keeps the store honest
+    // on success.
     const fire = (p: unknown) => {
-        Promise.resolve(p).catch(() => {});
+        Promise.resolve(p).catch((e) => console.error('disappear: TTL action failed', e));
     };
 
     const choose = (action: () => unknown) => {
