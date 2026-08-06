@@ -28,6 +28,7 @@ func (f fixedTTL) GetTTL(context.Context, string) (time.Duration, bool, error) {
 type discardLogger struct{}
 
 func (discardLogger) LogError(string, ...any) {}
+func (discardLogger) LogInfo(string, ...any) {}
 
 // TestIntegrationExpireSweepPurge drives the full server lifecycle against an
 // in-memory sqlite DB: a posted message is indexed, the sweeper hard-purges the

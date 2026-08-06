@@ -49,6 +49,8 @@ func (l *captureLogger) LogError(msg string, _ ...any) {
 	l.errors = append(l.errors, msg)
 }
 
+func (l *captureLogger) LogInfo(string, ...any) {}
+
 func newSweeper(store *fakeStore, purger *fakePurger) (*Sweeper, *captureLogger) {
 	log := &captureLogger{}
 	return New(store, purger, log, 10), log

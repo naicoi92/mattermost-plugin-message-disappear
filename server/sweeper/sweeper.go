@@ -24,6 +24,7 @@ type Purger interface {
 
 // Logger is the subset of the plugin API used for logging.
 type Logger interface {
+	LogInfo(msg string, keyvals ...any)
 	LogError(msg string, keyvals ...any)
 }
 
@@ -79,4 +80,5 @@ func (s *Sweeper) Run() {
 	if err := s.store.DeleteByPostIDs(ctx, postIDs); err != nil {
 		s.log.LogError("disappear: prune expire rows failed", "err", err)
 	}
+	s.log.LogInfo("disappear: sweeper purged posts", "n", len(postIDs))
 }
