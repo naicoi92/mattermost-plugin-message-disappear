@@ -44,3 +44,4 @@ server/manifest.go
 .pi/
 .vscode/
 WATCHDOG.yml
+.design-drafts/

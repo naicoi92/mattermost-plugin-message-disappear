@@ -89,19 +89,3 @@ func TestDisappearCommand(t *testing.T) {
 	assert.Equal(t, api.CommandTrigger, cmd.Trigger)
 	assert.True(t, cmd.AutoComplete)
 }
-
-func TestMessageHasBeenPostedIsNoOpWhenExpiryDisabled(t *testing.T) {
-	p := &Plugin{} // expiryService is nil (no DB)
-	require.NotPanics(t, func() {
-		p.MessageHasBeenPosted(nil, &model.Post{Id: "post-1", CreateAt: 1, Message: "hello"})
-	})
-}
-
-// When the expire index is wired, MessageHasBeenPosted runs OnPostCreated through it.
-func TestMessageHasBeenPostedRunsExpiryWhenWired(t *testing.T) {
-	p := activatedPlugin(t)
-	// expiryService is wired by activatedPlugin; TTL unset -> OnPostCreated skips indexing, no panic.
-	require.NotPanics(t, func() {
-		p.MessageHasBeenPosted(nil, &model.Post{Id: "p1", ChannelId: "c1", CreateAt: 1000})
-	})
-}

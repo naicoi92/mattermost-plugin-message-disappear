@@ -4,7 +4,7 @@
 
 ### Added
 
-- **Backfill post cũ khi set TTL.** Trước đây chỉ post tạo SAU khi set TTL mới được index → message cũ không bao giờ bị xóa. Giờ khi set TTL, plugin index toàn bộ post hiện có trong channel (async, background) với expire_at = (newest CreateAt của thread) + TTL → thread bị xóa như một unit khi TẤT CẢ message đều già hơn TTL. Message cũ (đã quá TTL) bị xóa ở sweep kế tiếp (≤60s).
+- **Bảo vệ saved messages.** Post nào đã được user save (lưu trong bảng `preferences`, `category='flagged_post'`) → cả thread chứa nó được giữ, không bị xóa kể cả khi đã quá TTL. Vì mô hình thread-as-unit không thể xóa từng phần, một post saved bảo vệ cả thread.
 
 ### Fixed
 
@@ -17,6 +17,7 @@
 ### Changed
 
 - **Bỏ plugin KV — TTL settings chuyển sang SQL master DB (bảng `mpmd_ttl`).** Trên Mattermost 10.x, RPC plugin bị shut down khi reload/deactivate nên mọi `KVSetWithOptions` fail `connection is shut down` → TTL set/view/off không hoạt động. TTL giờ lưu cùng master DB với expire-index + purge (UPSERT `ON CONFLICT`, thay cho CAS retry-loop cũ). Hệ quả: TTL giờ cần master DB (như auto-delete vốn đã cần); môi trường không bật DB access → plugin không activate. TTL cũ trong KV không được migrate (KV đang hỏng) — cần set lại sau upgrade.
+- **Bỏ expire-index (`mpmd_expire`), sweep thẳng từ `posts`.** Trước đây plugin duy trì bảng index riêng với `expire_at` tính trước (kèm backfill + thread-bump) — phức tạp và là nguồn của 3 bug placeholder `?`. Giờ sweeper đọc trực tiếp `posts.createat`: mỗi 60s, mỗi channel có TTL, tìm các thread mà message mới nhất già hơn TTL rồi hard-purge cả thread (thread-as-unit, không mồ côi; reply-of-reply vẫn gom về root). Message cũ tự đúng (không cần backfill). `MessageHasBeenPosted` hook bị bỏ (không còn index). Bảng `mpmd_expire` bị `DROP` trong migrate. Trade-off: sweep giờ `GROUP BY posts(channelid)` mỗi 60s thay vì range-scan bảng nhỏ — MM có index channelid nên OK cho channel thường.
 - **`make deploy` / `make deploy-linux-amd64` now stamp the short commit hash onto the build.** Every deployed plugin carries `version+<shorthash>` (semver build metadata, e.g. `1.1.0+018952b`) in its manifest — visible in the Mattermost plugin page — and the bundle is named `…-1.1.0+018952b.tar.gz`, with a deploy log line `Deploying … (commit …)`. The source `plugin.json` and generated manifests stay clean; only the deployed artifact is tagged. Wires up the `BuildHashShort` infra that was gathered but unused.
 
 ## 1.1.0

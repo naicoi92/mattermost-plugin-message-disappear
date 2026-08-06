@@ -12,8 +12,8 @@ import (
 	"github.com/mattermost/mattermost/server/public/pluginapi"
 
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/api"
-	"github.com/naicoi92/mattermost-plugin-message-disappear/server/expiry"
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/purge"
+	"github.com/naicoi92/mattermost-plugin-message-disappear/server/retention"
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/sweeper"
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/ttl"
 )
@@ -22,9 +22,10 @@ const sweeperInterval = 60 * time.Second
 
 // Plugin implements the Mattermost server plugin hooks.
 //
-// Disappearing-messages lifecycle: TTL set (V2) -> expire index (V3.1) ->
-// sweeper + transactional hard purge (V3.2/V4). This wiring activates the TTL
-// service, the HTTP/slash API, the expire index, the background sweeper and the Purger.
+// Disappearing-messages lifecycle: a per-channel TTL is set (D2/D4); a background
+// sweeper finds threads older than the TTL and transactionally hard-purges them.
+// This wiring activates the TTL service, the HTTP/slash API, the retention finder,
+// the background sweeper and the Purger.
 type Plugin struct {
 	plugin.MattermostPlugin
 
@@ -32,20 +33,19 @@ type Plugin struct {
 	// db + sqlDriver are injected by tests; production opens the master DB via
 	// pluginapi in OnActivate and reads the SQL driver from the server config.
 	// sqlDriver selects the placeholder style ("?" vs the postgres "$N" form).
-	db        *sql.DB
-	sqlDriver string
+	db            *sql.DB
+	sqlDriver     string
 	cfg           configHolder
 	ttlService    *ttl.Service
 	apiHandler    *api.Handler
-	expireStore   expiry.ExpireIndexStore
-	expiryService *expiry.Service
+	finder        *retention.Finder
 	purger        purge.Purger
 	sweeper       *sweeper.Sweeper
 	sweeperCancel context.CancelFunc
 }
 
 // OnActivate wires the TTL service, the HTTP/slash API surface, the /disappear
-// command, and — backed by the master DB — the expire index, Purger and sweeper.
+// command, and — backed by the master DB — the retention finder, Purger and sweeper.
 func (p *Plugin) OnActivate() error {
 	p.API.LogInfo("Disappearing Messages plugin activated")
 	p.loadConfig()
@@ -80,10 +80,10 @@ func (p *Plugin) OnActivate() error {
 	return nil
 }
 
-// wirePersistence migrates the TTL and expire-index tables and wires the TTL
-// service, expire index, transactional Purger, and (against a real server) the
-// background sweeper onto a single master DB handle. driver rebinds "?" to the
-// DB's native placeholder form.
+// wirePersistence migrates the TTL table and wires the TTL service, retention
+// finder, transactional Purger, and (against a real server) the background
+// sweeper onto a single master DB handle. driver rebinds "?" to the DB's native
+// placeholder form. Posts are the source of truth — there is no expire index.
 func (p *Plugin) wirePersistence(ctx context.Context, db *sql.DB, driver string) error {
 	ttlStore := ttl.NewSQLStore(db, driver)
 	if err := ttlStore.Migrate(ctx); err != nil {
@@ -92,20 +92,13 @@ func (p *Plugin) wirePersistence(ctx context.Context, db *sql.DB, driver string)
 	p.ttlService = ttl.NewService(ttlStore, p.API)
 	p.apiHandler = api.New(p.ttlService, p.API)
 
-	p.expireStore = expiry.NewSQLStore(db, driver)
-	if err := p.expireStore.Migrate(ctx); err != nil {
-		return fmt.Errorf("disappear: expire index migrate: %w", err)
-	}
-	p.expiryService = expiry.NewService(p.expireStore, p.ttlService)
-	// Backfill existing posts whenever a TTL is set, so messages that predate
-	// the TTL age out too (not only messages posted afterwards).
-	p.ttlService.OnTTLChanged = p.onTTLChanged
+	p.finder = retention.NewFinder(db, driver)
 	p.purger = purge.NewSQLPurger(db, driver)
 
 	// The sweeper runs only against a real server (Driver set). Tests inject a
 	// DB but have no Driver, so they don't spawn the background goroutine.
 	if p.Driver != nil {
-		p.initSweeper()
+		p.initSweeper(ttlStore, p.finder)
 	}
 	return nil
 }
@@ -120,23 +113,6 @@ func (p *Plugin) masterDriver() string {
 	return "postgres"
 }
 
-// onTTLChanged runs when a TTL is set: it backfills the channel's existing
-// posts so they age out (not only messages posted afterwards). Best-effort and
-// async — SetTTL returns immediately; the backfill indexes posts in the
-// background and the next sweeper tick purges any already past their expiry.
-func (p *Plugin) onTTLChanged(channelID string, d time.Duration) {
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		start := time.Now()
-		if err := p.expiryService.BackfillChannel(ctx, channelID); err != nil {
-			p.API.LogError("disappear: backfill failed", "channel_id", channelID, "err", err)
-			return
-		}
-		p.API.LogInfo("disappear: backfill indexed existing posts", "channel_id", channelID, "ttl", d.String(), "elapsed_ms", time.Since(start).Milliseconds())
-	}()
-}
-
 // initSweeper starts the background sweeper on a fixed interval.
 //
 // The sweeper runs on its own goroutine driven by a context that OnDeactivate
@@ -148,11 +124,11 @@ func (p *Plugin) onTTLChanged(channelID string, d time.Duration) {
 // This intentionally replaces cluster.Schedule: its KV-mutex pinger (Lock over
 // context.Background) spins forever once the plugin's RPC connection is shut
 // down, hanging OnDeactivate and flooding the log with "connection is shut down".
-func (p *Plugin) initSweeper() {
+func (p *Plugin) initSweeper(ttlSrc sweeper.TTLSource, finder sweeper.PostFinder) {
 	// Route purges through the config switch (hard purge gated by the schema-version
 	// allowlist; soft-delete fallback when EnablePurge is off or the schema is untested).
 	swPurger := &configPurger{cfg: &p.cfg, hard: p.purger, soft: p.API, api: p.API}
-	p.sweeper = sweeper.New(p.expireStore, swPurger, p.API, 500)
+	p.sweeper = sweeper.New(ttlSrc, finder, swPurger, p.API, 500)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	p.sweeperCancel = cancel
@@ -210,17 +186,6 @@ func (p *Plugin) ServeHTTP(_ *plugin.Context, w http.ResponseWriter, r *http.Req
 // ExecuteCommand dispatches /disappear set|off|status to the API handler.
 func (p *Plugin) ExecuteCommand(_ *plugin.Context, args *model.CommandArgs) (*model.CommandResponse, *model.AppError) {
 	return p.apiHandler.ExecuteCommand(args)
-}
-
-// MessageHasBeenPosted indexes the post's expiry (D1/D5) when the channel has a TTL.
-// Editing does NOT reset the TTL (D7) — there is intentionally no expiry update on edit.
-func (p *Plugin) MessageHasBeenPosted(_ *plugin.Context, post *model.Post) {
-	if p.expiryService == nil || post == nil || post.Id == "" {
-		return
-	}
-	if err := p.expiryService.OnPostCreated(context.Background(), post); err != nil {
-		p.API.LogError("disappear: failed to index post expiry", "post_id", post.Id, "err", err)
-	}
 }
 
 func (p *Plugin) disappearCommand() *model.Command {

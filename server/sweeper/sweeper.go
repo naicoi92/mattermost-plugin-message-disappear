@@ -1,23 +1,32 @@
-// Package sweeper periodically purges posts whose expire_at has passed and prunes
-// their index rows. The plugin drives it on a fixed ticker (see plugin.initSweeper).
+// Package sweeper periodically purges posts whose age has passed the channel's
+// TTL. The plugin drives it on a fixed ticker (see plugin.initSweeper).
+//
+// Posts are the single source of truth (no separate expire index): on each tick
+// the sweeper asks the TTL store which channels have a TTL, then asks the
+// retention finder for the threads in each channel whose newest message is older
+// than the TTL, and purges them. Saved messages are protected by the finder.
 package sweeper
 
 import (
 	"context"
 	"time"
 
-	"github.com/naicoi92/mattermost-plugin-message-disappear/server/expiry"
+	"github.com/naicoi92/mattermost-plugin-message-disappear/server/ttl"
 )
 
-// ExpireStore is the subset of the expire index the sweeper consumes.
-// expiry.ExpireIndexStore satisfies it.
-type ExpireStore interface {
-	GetExpired(ctx context.Context, nowMs int64, limit int) ([]expiry.Entry, error)
-	DeleteByPostIDs(ctx context.Context, postIDs []string) error
+// TTLSource lists channels that have a TTL. ttl.TTLSettingStore satisfies it.
+type TTLSource interface {
+	Channels(ctx context.Context) ([]ttl.ChannelTTL, error)
 }
 
-// Purger hard-deletes posts and their related data in one transaction.
-// purge.Purger satisfies it.
+// PostFinder returns the post ids to purge for a channel past an age threshold.
+// retention.Finder satisfies it.
+type PostFinder interface {
+	AgedThreads(ctx context.Context, channelID string, thresholdMs int64, limit int) ([]string, error)
+}
+
+// Purger hard-deletes posts and their related data (idempotent; deleting
+// already-removed rows is a no-op).
 type Purger interface {
 	Purge(ctx context.Context, postIDs []string) (int, error)
 }
@@ -30,23 +39,25 @@ type Logger interface {
 
 const defaultBatchSize = 500
 
-// Sweeper purges expired posts (D10) and prunes their index rows on each tick.
-// Run is driven by the plugin's ticker; purge is idempotent, so nodes sweeping concurrently are safe.
+// Sweeper purges aged posts per channel on each tick. Purge is idempotent, so
+// nodes sweeping concurrently are safe (worst case: redundant delete attempts).
 type Sweeper struct {
-	store     ExpireStore
+	ttls      TTLSource
+	finder    PostFinder
 	purger    Purger
 	log       Logger
 	batchSize int
 	now       func() int64
 }
 
-// New creates a sweeper with the given batch size (defaults to 500 when <= 0).
-func New(store ExpireStore, purger Purger, log Logger, batchSize int) *Sweeper {
+// New creates a sweeper (batchSize defaults to 500 when <= 0).
+func New(ttls TTLSource, finder PostFinder, purger Purger, log Logger, batchSize int) *Sweeper {
 	if batchSize <= 0 {
 		batchSize = defaultBatchSize
 	}
 	return &Sweeper{
-		store:     store,
+		ttls:      ttls,
+		finder:    finder,
 		purger:    purger,
 		log:       log,
 		batchSize: batchSize,
@@ -54,31 +65,32 @@ func New(store ExpireStore, purger Purger, log Logger, batchSize int) *Sweeper {
 	}
 }
 
-// Run executes one sweep tick: purge expired posts and prune their index rows.
-//   - purge succeeds -> prune the index rows (stale orphans are pruned too).
-//   - purge fails -> keep all rows so the batch is retried next tick (no partial).
+// Run executes one sweep tick: for every channel with a TTL, find threads whose
+// newest message is older than the TTL and purge them (whole threads; saved
+// messages are protected by the finder). A purge failure leaves the posts in
+// place — the next tick finds and retries them.
 func (s *Sweeper) Run() {
 	ctx := context.Background()
-	entries, err := s.store.GetExpired(ctx, s.now(), s.batchSize)
+	channels, err := s.ttls.Channels(ctx)
 	if err != nil {
-		s.log.LogError("disappear: sweeper query failed", "err", err)
+		s.log.LogError("disappear: sweeper list TTLs failed", "err", err)
 		return
 	}
-	if len(entries) == 0 {
-		return
+	now := s.now()
+	for _, c := range channels {
+		threshold := now - c.TTL.Milliseconds()
+		ids, err := s.finder.AgedThreads(ctx, c.ChannelID, threshold, s.batchSize)
+		if err != nil {
+			s.log.LogError("disappear: sweeper query failed", "channel_id", c.ChannelID, "err", err)
+			continue
+		}
+		if len(ids) == 0 {
+			continue
+		}
+		if _, err := s.purger.Purge(ctx, ids); err != nil {
+			s.log.LogError("disappear: purge failed; will retry next tick", "channel_id", c.ChannelID, "n", len(ids), "err", err)
+			continue
+		}
+		s.log.LogInfo("disappear: sweeper purged posts", "channel_id", c.ChannelID, "n", len(ids))
 	}
-
-	postIDs := make([]string, len(entries))
-	for i, e := range entries {
-		postIDs[i] = e.PostID
-	}
-
-	if _, err := s.purger.Purge(ctx, postIDs); err != nil {
-		s.log.LogError("disappear: purge failed; will retry next tick", "n", len(postIDs), "err", err)
-		return
-	}
-	if err := s.store.DeleteByPostIDs(ctx, postIDs); err != nil {
-		s.log.LogError("disappear: prune expire rows failed", "err", err)
-	}
-	s.log.LogInfo("disappear: sweeper purged posts", "n", len(postIDs))
 }

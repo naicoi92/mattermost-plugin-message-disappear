@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/naicoi92/mattermost-plugin-message-disappear/server/sqlutil"
 )
@@ -18,6 +19,13 @@ type TTLSetting struct {
 	DurationSeconds int64
 	SetBy           string
 	SetAt           int64 // unix milliseconds
+}
+
+// ChannelTTL pairs a channel id with its TTL duration — the sweeper iterates
+// every channel that has a TTL.
+type ChannelTTL struct {
+	ChannelID string
+	TTL       time.Duration
 }
 
 // TTLSettingStore persists per-channel TTL settings (persistence port; DIP for
@@ -31,13 +39,14 @@ type TTLSettingStore interface {
 	Set(channelID string, setting TTLSetting) error
 	// Clear removes the channel's TTL (default OFF).
 	Clear(channelID string) error
+	// Channels returns every channel that has a TTL (the sweeper iterates these).
+	Channels(ctx context.Context) ([]ChannelTTL, error)
 }
 
 // NewSQLStore wraps a Mattermost master DB handle as a TTLSettingStore. The TTL
-// settings live in the same master DB as the expire index (mpmd_expire) and the
-// purge targets, so there is a single persistence backend and no plugin-KV
-// dependency (KV proved unreliable on Mattermost 10.x: "connection is shut
-// down" during reload/deactivate).
+// settings live in the same master DB as the purge targets, so there is a single
+// persistence backend and no plugin-KV dependency (KV proved unreliable on
+// Mattermost 10.x: "connection is shut down" during reload/deactivate).
 func NewSQLStore(db *sql.DB, driver string) TTLSettingStore {
 	return &sqlStore{db: db, driver: driver}
 }
@@ -47,7 +56,9 @@ type sqlStore struct {
 	driver string
 }
 
-// ttlDDL is portable across postgres and sqlite (MM v10+ is postgres-focused).
+// ttlDDL creates the TTL config table. It also drops the now-removed expire
+// index (mpmd_expire) from earlier plugin versions — that data was derived
+// (recreatable from posts) and is no longer used. Portable postgres + sqlite.
 const ttlDDL = `
 CREATE TABLE IF NOT EXISTS mpmd_ttl (
     channel_id VARCHAR(26) NOT NULL PRIMARY KEY,
@@ -55,6 +66,7 @@ CREATE TABLE IF NOT EXISTS mpmd_ttl (
     set_by     VARCHAR(26) NOT NULL,
     set_at     BIGINT NOT NULL
 );
+DROP TABLE IF EXISTS mpmd_expire;
 `
 
 func (s *sqlStore) Migrate(ctx context.Context) error {
@@ -107,4 +119,28 @@ func (s *sqlStore) Clear(channelID string) error {
 		return fmt.Errorf("ttl: clear %q: %w", channelID, err)
 	}
 	return nil
+}
+
+// listTTLsSQL returns every channel that has a TTL and its duration.
+const listTTLsSQL = `SELECT channel_id, duration_s FROM mpmd_ttl;`
+
+// Channels returns every channel with a TTL (the sweeper iterates these).
+func (s *sqlStore) Channels(ctx context.Context) ([]ChannelTTL, error) {
+	rows, err := s.db.QueryContext(ctx, sqlutil.Rebind(s.driver, listTTLsSQL))
+	if err != nil {
+		return nil, fmt.Errorf("ttl: list channels: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []ChannelTTL
+	for rows.Next() {
+		var ct ChannelTTL
+		var durSec int64
+		if err := rows.Scan(&ct.ChannelID, &durSec); err != nil {
+			return nil, fmt.Errorf("ttl: scan channels: %w", err)
+		}
+		ct.TTL = time.Duration(durSec) * time.Second
+		out = append(out, ct)
+	}
+	return out, rows.Err()
 }
