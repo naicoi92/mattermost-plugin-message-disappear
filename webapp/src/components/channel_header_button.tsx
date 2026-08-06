@@ -1,25 +1,21 @@
 import {useEffect, useRef, useState} from 'react';
-import {useSelector} from 'react-redux';
+import {useDispatch, useSelector} from 'react-redux';
 
+import {clearTTL, setTTL, TTLInfo} from 'client';
 import {useChannelTTL} from 'hooks/use_channel_ttl';
-import {clearTTL, setTTL} from 'client';
 import {PRESETS, shortDuration} from 'presets';
-import {GlobalState} from 'reducer';
+import {DisappearAction, GlobalState, setChannelTTL} from 'reducer';
 
 // ChannelHeaderButton is registered via registerChannelHeaderIcon (Mattermost
-// 11.5+). The webapp renders it in the channel header and passes the `channel`
-// (and channelMember) as props; we use channel.id as the authoritative channel id.
-// (Reading state.entities.channels.currentChannelId from redux previously sent an
-// id the server rejected with "ttl: channel not found".)
+// 11.5+). The webapp renders it in the channel header; we use channel.id (falling
+// back to the redux current channel id) as the authoritative channel id.
 //
-// It is a small button showing ⏱ + the current TTL ("Off" or a short duration);
-// clicking opens a dropdown of presets + Off for fast setup. registerChannelHeaderIcon
-// has no action callback, so the click + dropdown live entirely in this component.
+// It shows ⏱ + the current TTL ("Off" or a short duration); clicking opens a
+// dropdown of presets + Off. Selecting applies immediately and updates the label
+// at once (optimistic), so the UI does not wait on the ttl_changed WebSocket
+// round-trip — that event still confirms the change for OTHER clients.
 export default function ChannelHeaderButton({channel}: {channel?: {id: string}}) {
-    // registerChannelHeaderIcon (MM 11.5+) is meant to pass `channel`, but not
-    // every host build does — fall back to the redux current channel id so the
-    // menu always acts on the channel the user is viewing (an empty id makes the
-    // server reject the set with 400, silently swallowed before this fix).
+    const dispatch = useDispatch() as (action: DisappearAction) => void;
     const currentChannelId = useSelector((state: GlobalState) => state.entities.channels.currentChannelId);
     const channelId = channel?.id || currentChannelId || '';
     const ttl = useChannelTTL(channelId);
@@ -51,15 +47,13 @@ export default function ChannelHeaderButton({channel}: {channel?: {id: string}})
         };
     }, [open]);
 
-    // Fire-and-forget; surface failures to the console so a rejected set is
-    // visible (previously swallowed). The ttl_changed WS keeps the store honest
-    // on success.
-    const fire = (p: unknown) => {
-        Promise.resolve(p).catch((e) => console.error('disappear: TTL action failed', e));
-    };
-
-    const choose = (action: () => unknown) => {
-        fire(action());
+    // apply runs the set/clear, then updates the store optimistically so the label
+    // flips immediately. Failures are logged to the console. The ttl_changed WS
+    // event (published by the server) still propagates the change to other clients.
+    const apply = (action: unknown, next: TTLInfo | null) => {
+        Promise.resolve(action).
+            then(() => dispatch(setChannelTTL(channelId, next))).
+            catch((e) => console.error('disappear: TTL action failed', e));
         setOpen(false);
     };
 
@@ -81,9 +75,9 @@ export default function ChannelHeaderButton({channel}: {channel?: {id: string}})
                         type='button'
                         role='menuitem'
                         className='disappear-menuitem'
-                        onClick={() => choose(() => clearTTL(channelId))}
+                        onClick={() => apply(clearTTL(channelId), null)}
                     >
-                        Off
+                        {'Off'}
                     </button>
                     {PRESETS.map((p) => (
                         <button
@@ -92,7 +86,11 @@ export default function ChannelHeaderButton({channel}: {channel?: {id: string}})
                             role='menuitem'
                             className='disappear-menuitem'
                             aria-current={ttl?.duration === p.seconds || undefined}
-                            onClick={() => choose(() => setTTL(channelId, p.seconds))}
+                            onClick={() => apply(setTTL(channelId, p.seconds), {
+                                duration: p.seconds,
+                                set_by: '',
+                                set_at: Date.now(),
+                            })}
                         >
                             {p.shortLabel}
                         </button>
