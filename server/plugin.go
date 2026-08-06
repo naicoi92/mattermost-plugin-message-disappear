@@ -97,7 +97,7 @@ func (p *Plugin) wirePersistence(ctx context.Context, db *sql.DB, driver string)
 		return fmt.Errorf("disappear: expire index migrate: %w", err)
 	}
 	p.expiryService = expiry.NewService(p.expireStore, p.ttlService)
-	p.purger = purge.NewSQLPurger(db)
+	p.purger = purge.NewSQLPurger(db, driver)
 
 	// The sweeper runs only against a real server (Driver set). Tests inject a
 	// DB but have no Driver, so they don't spawn the background goroutine.

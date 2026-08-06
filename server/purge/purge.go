@@ -12,6 +12,8 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+
+	"github.com/naicoi92/mattermost-plugin-message-disappear/server/sqlutil"
 )
 
 // Purger hard-deletes posts and their related data.
@@ -44,13 +46,15 @@ var footprint = []struct {
 	{"mentions", "post_id"},
 }
 
-// NewSQLPurger wraps a Mattermost master DB handle as a Purger.
-func NewSQLPurger(db *sql.DB) Purger {
-	return &sqlPurger{db: db}
+// NewSQLPurger wraps a Mattermost master DB handle as a Purger. driver rebinds
+// "?" placeholders to the DB's native form (postgres needs $N).
+func NewSQLPurger(db *sql.DB, driver string) Purger {
+	return &sqlPurger{db: db, driver: driver}
 }
 
 type sqlPurger struct {
-	db *sql.DB
+	db     *sql.DB
+	driver string
 }
 
 // Purge deletes every footprint row for the given post ids in one transaction.
@@ -66,7 +70,7 @@ func (p *sqlPurger) Purge(ctx context.Context, postIDs []string) (int, error) {
 		return 0, fmt.Errorf("purge: begin tx: %w", err)
 	}
 	for _, f := range footprint {
-		stmt := "DELETE FROM " + f.table + " WHERE " + f.col + " IN " + placeholders
+		stmt := sqlutil.Rebind(p.driver, "DELETE FROM "+f.table+" WHERE "+f.col+" IN "+placeholders)
 		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
 			_ = tx.Rollback()
 			return 0, fmt.Errorf("purge: delete %s.%s: %w", f.table, f.col, err)

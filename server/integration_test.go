@@ -65,7 +65,7 @@ func TestIntegrationExpireSweepPurge(t *testing.T) {
 	seed("kept") // not expired -> survives
 
 	expirySvc := expiry.NewService(store, fixedTTL{d: time.Hour})
-	sw := sweeper.New(store, purge.NewSQLPurger(db), discardLogger{}, 10)
+	sw := sweeper.New(store, purge.NewSQLPurger(db, "sqlite"), discardLogger{}, 10)
 
 	now := time.Now().UnixMilli()
 	hour := time.Hour.Milliseconds()
